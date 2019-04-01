@@ -110,6 +110,8 @@ static struct lexer_token {
   TOKEN(CERTFILE),
   TOKEN(KEYFILE),
   TOKEN(CAFILE),
+  TOKEN(VERIFYCERT),
+  TOKEN(VERIFYCA),
 #undef TOKEN
   { "administrator", ADMIN },
   { "apass_opmode", TPRIV_APASS_OPMODE },

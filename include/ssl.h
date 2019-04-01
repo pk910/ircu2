@@ -13,6 +13,7 @@ enum SSLFlag {
   SSLFLAG_HANDSHAKE,
   SSLFLAG_HANDSHAKE_R,
   SSLFLAG_HANDSHAKE_W,
+  SSLFLAG_VERIFYCA,
 
   SSLFLAG_LAST
 };
@@ -34,6 +35,7 @@ struct SSLOutConnection {
   struct SSLFlags flags;
   SSL *session;
   SSL_CTX *context;
+  char *verifycert;
 };
 
 struct SSLListener {
@@ -73,11 +75,14 @@ extern struct SSLListener *ssl_create_listener();
 extern struct SSLConnection *ssl_create_connect(int fd, void *data);
 
 extern struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data);
-extern void ssl_start_handshake_connect(struct SSLConnection *connection);
+extern int ssl_start_handshake_connect(struct SSLConnection *connection);
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len);
 IOResult ssl_send_encrypt(struct SSLConnection *connection, struct MsgQ* buf, unsigned int *count_in, unsigned int *count_out);
 IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, char *buf, int len);
 extern int ssl_connection_flush(struct SSLConnection *connection);
+
+extern void ssl_set_verifyca(struct SSLConnection *connection);
+extern void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint);
 
 #endif /* INCLUDED_parse_h */

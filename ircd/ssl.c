@@ -71,6 +71,9 @@ void ssl_free_connection(struct SSLConnection *connection) {
   if(FlagHas(&connection->flags, SSLFLAG_OUTGOING)) {
     struct SSLOutConnection *outconn = (struct SSLOutConnection *)connection;
     context = outconn->context;
+    
+    if(outconn->verifycert)
+      free(outconn->verifycert);
   }
   SSL_shutdown(connection->session);
   SSL_free(connection->session);
@@ -94,10 +97,14 @@ static void ssl_handshake_completed(struct SSLConnection *connection, int succes
         firstPendingConection = pending->next;
       
       struct Client *cptr = (struct Client *) pending->data;
-      if(success && FlagHas(&connection->flags, SSLFLAG_INCOMING)) {
-        start_auth(cptr);
+      if(success) {
+        if(FlagHas(&connection->flags, SSLFLAG_INCOMING))
+          start_auth(cptr);
+        else if(FlagHas(&connection->flags, SSLFLAG_OUTGOING))
+          completed_connection(cptr);
       }
       free(pending);
+      break;
     }
     lastPending = pending;
   }
@@ -133,6 +140,7 @@ struct SSLConnection *ssl_create_connect(int fd, void *data) {
   
   if(!connection)
     return NULL;
+  connection->verifycert = NULL;
   
   if(!ssl_is_initialized)
     ssl_init();
@@ -168,8 +176,8 @@ ssl_create_connect_failed:
   return NULL;
 }
 
-void ssl_start_handshake_connect(struct SSLConnection *connection) {
-  ssl_handshake_outgoing(connection);
+int ssl_start_handshake_connect(struct SSLConnection *connection) {
+  return ssl_handshake_outgoing(connection);
 }
 
 struct SSLListener *ssl_create_listener() {
@@ -397,6 +405,31 @@ int ssl_connection_flush(struct SSLConnection *connection) {
   return 0;
 }
 
+void ssl_set_verifyca(struct SSLConnection *connection) {
+  // cannot verify ca when already ready
+  if(FlagHas(&connection->flags, SSLFLAG_READY))
+    return;
+
+  FlagSet(&connection->flags, SSLFLAG_VERIFYCA);
+}
+
+void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint) {
+  // outgoing connections only
+  if(!FlagHas(&connection->flags, SSLFLAG_OUTGOING))
+    return;
+  
+  // cannot verify ca when already ready
+  if(FlagHas(&connection->flags, SSLFLAG_READY))
+    return;
+  
+  struct SSLOutConnection *outcon = (struct SSLOutConnection *)connection;
+  int fplen = strlen(fingerprint);
+  if(outcon->verifycert)
+    free(outcon->verifycert);
+  outcon->verifycert = malloc(fplen+1);
+  memcpy(outcon->verifycert, fingerprint, fplen+1);
+}
+
 #else
 // fallback dummy implementation
 
@@ -407,11 +440,14 @@ struct SSLListener *ssl_create_listener() { return NULL; };
 struct SSLConnection *ssl_create_connect(int fd, void *data) { return NULL };
 
 struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data) { return NULL; };
-void ssl_start_handshake_connect(struct SSLConnection *connection) {};
+int ssl_start_handshake_connect(struct SSLConnection *connection) { return -1; };
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len) { return IO_FAILURE; };
 IOResult ssl_send_encrypt(struct SSLConnection *connection, struct MsgQ* buf, unsigned int *count_in, unsigned int *count_out) { return IO_FAILURE; };
 IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, char *buf, int len) { return IO_FAILURE; };
 int ssl_connection_flush(struct SSLConnection *connection) { return 0; };
+
+void ssl_set_verifyca(struct SSLConnection *connection) { };
+void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint) { };
 #endif
 

@@ -74,7 +74,7 @@
   int yylex(void);
   /* Now all the globals we need :/... */
   int tping, tconn, maxlinks, sendq, port, invert, stringno, flags;
-  char *name, *pass, *host, *ip, *username, *origin, *hub_limit;
+  char *name, *pass, *host, *ip, *username, *origin, *hub_limit, *verify_cert;
   struct SLink *hosts;
   char *stringlist[MAX_STRINGS];
   struct ListenerFlags listen_flags;
@@ -181,6 +181,8 @@ static void free_slist(struct SLink **link) {
 %token CERTFILE
 %token KEYFILE
 %token CAFILE
+%token VERIFYCERT
+%token VERIFYCA
 /* and now a lot of privileges... */
 %token TPRIV_CHAN_LIMIT TPRIV_MODE_LCHAN TPRIV_DEOP_LCHAN TPRIV_WALK_LCHAN
 %token TPRIV_LOCAL_KILL TPRIV_REHASH TPRIV_RESTART TPRIV_DIE
@@ -532,6 +534,7 @@ connectblock: CONNECT
     */
    aconf->maximum = (hub_limit != NULL && maxlinks == 0) ? 65535 : maxlinks;
    aconf->hub_limit = hub_limit;
+   aconf->verify_cert = verify_cert;
    aconf->flags = flags;
    lookup_confhost(aconf);
  }
@@ -541,15 +544,17 @@ connectblock: CONNECT
    MyFree(host);
    MyFree(origin);
    MyFree(hub_limit);
+   MyFree(verify_cert);
  }
- name = pass = host = origin = hub_limit = NULL;
+ name = pass = host = origin = hub_limit = verify_cert = NULL;
  c_class = NULL;
  port = flags = maxlinks = 0;
 };
 connectitems: connectitem connectitems | connectitem;
 connectitem: connectname | connectpass | connectclass | connecthost
               | connectport | connectvhost | connectleaf | connecthub
-              | connecthublimit | connectmaxhops | connectauto;
+              | connecthublimit | connectmaxhops | connectauto
+              | connectssl | connectverifyca | connectverifycert;
 connectname: NAME '=' QSTRING ';'
 {
  MyFree(name);
@@ -601,6 +606,15 @@ connectmaxhops: MAXHOPS '=' expr ';'
 };
 connectauto: AUTOCONNECT '=' YES ';' { flags |= CONF_AUTOCONNECT; }
  | AUTOCONNECT '=' NO ';' { flags &= ~CONF_AUTOCONNECT; };
+connectssl: SSL '=' YES ';' { flags |= CONF_USESSL; }
+ | SSL '=' NO ';' { flags &= ~CONF_USESSL; };
+connectverifyca: VERIFYCA '=' YES ';' { flags |= CONF_VERIFYCA; }
+ | VERIFYCA '=' NO ';' { flags &= ~CONF_VERIFYCA; };
+connectverifycert: VERIFYCERT '=' QSTRING ';'
+{
+  MyFree(verify_cert);
+  verify_cert = $3;
+};
 
 uworldblock: UWORLD '{' uworlditems '}' ';';
 uworlditems: uworlditem uworlditems | uworlditem;

@@ -64,3 +64,18 @@ According to RFC the port 6697 should also be used for SSL.
   ssl = yes;
   port = 6697;
  };
+
+You can use SSL on the server connections, too. For this, you just need to
+set ssl to yes within the connect block.
+  Connect {
+   ...
+   ssl = yes;
+  }
+
+Note: SSL connections must go to a ssl port. So you need to add a ssl enabled
+server port, too.
+ Port {
+  server = yes;
+  ssl = yes;
+  port = 6697;
+ };

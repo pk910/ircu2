@@ -267,8 +267,12 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
     return 0;
   }
   
-  if(aconf->usessl) {
+  if((aconf->flags & CONF_USESSL)) {
     struct SSLConnection *ssl = ssl_create_connect(cli_fd(cptr), cptr);
+    if((aconf->flags & CONF_VERIFYCA))
+      ssl_set_verifyca(ssl);
+    if((aconf->verify_cert))
+      ssl_set_verifycert(ssl, aconf->verify_cert);
     cli_connect(cptr)->con_ssl = ssl;
     if(ssl_handshake(ssl)) {
       unsigned int events = 0;
@@ -910,7 +914,8 @@ static void client_sock_callback(struct Event* ev)
 
   case ET_CONNECT: /* socket connection completed */
     if(cli_connect(cptr)->con_ssl) {
-      ssl_start_handshake_connect(cli_connect(cptr)->con_ssl);
+      if(ssl_start_handshake_connect(cli_connect(cptr)->con_ssl) < 0 || IsDead(cptr))
+        fallback = "SSL Handshake failed";
     }
     else if (!completed_connection(cptr) || IsDead(cptr))
       fallback = cli_info(cptr);
