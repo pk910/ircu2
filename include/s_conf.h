@@ -67,6 +67,7 @@ struct ConfItem
   time_t hold;        /**< Earliest time to attempt an outbound
                          connect on this ConfItem. */
   int dns_pending;    /**< A dns request is pending. */
+  int usessl;         /**< establish SSL connection */
   int flags;          /**< Additional modifiers for item. */
   int addrbits;       /**< Number of bits valid in ConfItem::address. */
   struct Privs privs; /**< Privileges for opers. */
@@ -116,6 +117,10 @@ struct LocalConf {
   char*          location1;   /**< First line of location information. */
   char*          location2;   /**< Second line of location information. */
   char*          contact;     /**< Admin contact information. */
+  
+  char*          sslcertfile; /**< SSL certificate file. */
+  char*          sslkeyfile;  /**< SSL private key file. */
+  char*          sslcafile;   /**< SSL CA file. */
 };
 
 enum {

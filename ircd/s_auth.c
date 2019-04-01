@@ -143,7 +143,10 @@ typedef enum {
 
 /** Sends response \a r (from #ReportType) to client \a c. */
 #define sendheader(c, r) \
-   send(cli_fd(c), HeaderMessages[(r)].message, HeaderMessages[(r)].length, 0)
+   if(cli_connect(c)->con_ssl) \
+     ssl_send_encrypt_plain(cli_connect(c)->con_ssl, HeaderMessages[(r)].message, HeaderMessages[(r)].length); \
+   else \
+     send(cli_fd(c), HeaderMessages[(r)].message, HeaderMessages[(r)].length, 0)
 
 /** Enumeration of IAuth connection flags. */
 enum IAuthFlag

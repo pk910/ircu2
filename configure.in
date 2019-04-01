@@ -226,6 +226,18 @@ else
 fi
 AC_SUBST(ENGINE_C)
 
+if test x$is_win32 = xyes ; then
+  openssl_deps="-lcrypto -lgdi32"
+else
+  openssl_deps="-lcrypto"
+fi
+AC_CHECK_HEADERS(openssl/ssl.h, [ 
+  AC_CHECK_LIB([ssl],[SSL_library_init], [
+    LIBS="$LIBS -lssl $openssl_deps"
+  ], [], $openssl_deps)
+])
+
+
 dnl Now look for --enable-debug
 AC_MSG_CHECKING([whether to enable debug mode])
 AC_ARG_ENABLE([debug],

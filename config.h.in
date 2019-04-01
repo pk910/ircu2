@@ -106,6 +106,9 @@
 /* Define if we have __va_copy */
 #undef HAVE___VA_COPY
 
+/* Define to 1 if you have <openssl/ssl.h> header file (SSL support). */
+#undef HAVE_OPENSSL_SSL_H
+
 /* Enable IPv6 support */
 #undef IPV6
 

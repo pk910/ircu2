@@ -59,6 +59,7 @@ extern struct irc_sockaddr VirtualHost_dns_v6;
 /*
  * Proto types
  */
+extern int completed_connection(struct Client* cptr);
 extern unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf);
 extern int connect_server(struct ConfItem* aconf, struct Client* by);
 extern int  net_close_unregistered_connections(struct Client* source);

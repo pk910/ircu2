@@ -152,7 +152,10 @@ kill_highest_sendq(int servers_too)
  */
 void flush_connections(struct Client* cptr)
 {
+  struct SSLConnection *ssl = cli_connect(cptr)->con_ssl;
   if (cptr) {
+    if(ssl)
+      ssl_connection_flush(ssl);
     send_queued(cptr);
   }
   else {
@@ -161,6 +164,7 @@ void flush_connections(struct Client* cptr)
       assert(0 < MsgQLength(&(con_sendQ(con))));
       send_queued(con_client(con));
     }
+    ssl_connection_flush(NULL);
   }
 }
 

@@ -53,6 +53,7 @@
 #include "s_misc.h"
 #include "s_user.h"
 #include "send.h"
+#include "ssl.h"
 #include "struct.h"
 #include "sys.h"
 #include "uping.h"
@@ -254,6 +255,7 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
     cli_fd(cptr) = -1;
     return 0;
   }
+  
   if (!socket_add(&(cli_socket(cptr)), client_sock_callback,
 		  (void*) cli_connect(cptr),
 		  (result == IO_SUCCESS) ? SS_CONNECTED : SS_CONNECTING,
@@ -264,6 +266,21 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
     cli_fd(cptr) = -1;
     return 0;
   }
+  
+  if(aconf->usessl) {
+    struct SSLConnection *ssl = ssl_create_connect(cli_fd(cptr), cptr);
+    cli_connect(cptr)->con_ssl = ssl;
+    if(ssl_handshake(ssl)) {
+      unsigned int events = 0;
+      if(ssl_wantread(ssl))
+        events |= SOCK_EVENT_READABLE;
+      if(ssl_wantwrite(ssl))
+        events |= SOCK_EVENT_WRITABLE;
+      socket_events(&(cli_socket(cptr)), SOCK_ACTION_SET | events);
+      result = IO_BLOCKED;
+    }
+  }
+  
   cli_freeflag(cptr) |= FREEFLAG_SOCKET;
   return 1;
 }
@@ -280,9 +297,16 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
 {
   unsigned int bytes_written = 0;
   unsigned int bytes_count = 0;
+  IOResult result;
   assert(0 != cptr);
 
-  switch (os_sendv_nonb(cli_fd(cptr), buf, &bytes_count, &bytes_written)) {
+  if(cli_connect(cptr)->con_ssl) {
+    result = ssl_send_encrypt(cli_connect(cptr)->con_ssl, buf, &bytes_count, &bytes_written);
+  } else {
+    result = os_sendv_nonb(cli_fd(cptr), buf, &bytes_count, &bytes_written);
+  }
+  
+  switch (result) {
   case IO_SUCCESS:
     ClrFlag(cptr, FLAG_BLOCKED);
 
@@ -308,7 +332,7 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
  * @param cptr Client to which we have connected, with all ConfItem structs attached.
  * @return Zero on failure (caller should exit_client()), non-zero on success.
  */
-static int completed_connection(struct Client* cptr)
+int completed_connection(struct Client* cptr)
 {
   struct ConfItem *aconf;
   time_t newts;
@@ -411,6 +435,11 @@ void close_connection(struct Client *cptr)
   else
     ServerStats->is_ni++;
 
+  if(cli_connect(cptr)->con_ssl) {
+    ssl_free_connection(cli_connect(cptr)->con_ssl);
+    cli_connect(cptr)->con_ssl = NULL;
+  }
+  
   if (-1 < cli_fd(cptr)) {
     flush_connections(cptr);
     LocalClientArray[cli_fd(cptr)] = 0;
@@ -552,8 +581,20 @@ void add_connection(struct Listener* listener, int fd) {
   ++listener->ref_count;
 
   Count_newunknown(UserStats);
-  /* if we've made it this far we can put the client on the auth query pile */
-  start_auth(new_client);
+  
+  if(listener_ssl(listener)) {
+    struct Connection* con = cli_connect(new_client);
+    con->con_ssl = ssl_start_handshake_listener(listener->ssl_listener, fd, new_client);
+    unsigned int events = 0;
+    if(ssl_wantread(con->con_ssl))
+      events |= SOCK_EVENT_READABLE;
+    if(ssl_wantwrite(con->con_ssl))
+      events |= SOCK_EVENT_WRITABLE;
+    socket_events(&(cli_socket(new_client)), SOCK_ACTION_SET | events);
+  } else {
+    /* if we've made it this far we can put the client on the auth query pile */
+    start_auth(new_client);
+  }
 }
 
 /** Determines whether to tell the events engine we're interested in
@@ -589,7 +630,16 @@ static int read_packet(struct Client *cptr, int socket_ready)
   if (socket_ready &&
       !(IsUser(cptr) &&
 	DBufLength(&(cli_recvQ(cptr))) > feature_int(FEAT_CLIENT_FLOOD))) {
-    switch (os_recv_nonb(cli_fd(cptr), readbuf, sizeof(readbuf), &length)) {
+    
+    /* Handle SSL Sockets
+    */
+    IOResult recvret;
+    if(cli_connect(cptr)->con_ssl) {
+      recvret = ssl_recv_decrypt(cli_connect(cptr)->con_ssl, readbuf, sizeof(readbuf), &length);
+    } else {
+      recvret = os_recv_nonb(cli_fd(cptr), readbuf, sizeof(readbuf), &length);
+    }
+    switch (recvret) {
     case IO_SUCCESS:
       if (length)
       {
@@ -608,7 +658,7 @@ static int read_packet(struct Client *cptr, int socket_ready)
       return 0;
     }
   }
-
+  
   /*
    * For server connections, we process as many as we can without
    * worrying about the time of day or anything :)
@@ -859,7 +909,10 @@ static void client_sock_callback(struct Event* ev)
     break;
 
   case ET_CONNECT: /* socket connection completed */
-    if (!completed_connection(cptr) || IsDead(cptr))
+    if(cli_connect(cptr)->con_ssl) {
+      ssl_start_handshake_connect(cli_connect(cptr)->con_ssl);
+    }
+    else if (!completed_connection(cptr) || IsDead(cptr))
       fallback = cli_info(cptr);
     break;
 

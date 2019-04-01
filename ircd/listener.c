@@ -40,6 +40,7 @@
 #include "s_misc.h"
 #include "s_stats.h"
 #include "send.h"
+#include "ssl.h"
 #include "sys.h"         /* MAXCLIENTS */
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
@@ -131,7 +132,7 @@ void show_ports(struct Client* sptr, const struct StatDesc* sd,
                 char* param)
 {
   struct Listener *listener = 0;
-  char flags[8];
+  char flags[9];
   int show_hidden = IsOper(sptr);
   int count = (IsOper(sptr) || MyUser(sptr)) ? 100 : 8;
   int port = 0;
@@ -166,6 +167,10 @@ void show_ports(struct Client* sptr, const struct StatDesc* sd,
       flags[len++] = '6';
       if (listener->fd_v6 < 0)
         flags[len++] = '-';
+    }
+    if (FlagHas(&listener->flags, LISTEN_SSL))
+    {
+      flags[len++] = 'E'; // E (encrypted)
     }
     flags[len] = '\0';
 
@@ -313,8 +318,18 @@ void add_listener(int port, const char* vhost_ip, const char* mask,
   {
     new_listener = 1;
     listener = make_listener(port, &vaddr);
+    
+    
   }
   memcpy(&listener->flags, flags, sizeof(listener->flags));
+  
+  if(FlagHas(&listener->flags, LISTEN_SSL) && !listener->ssl_listener) {
+    listener->ssl_listener = ssl_create_listener();
+  } else if(!FlagHas(&listener->flags, LISTEN_SSL) && listener->ssl_listener) {
+    ssl_free_listener(listener->ssl_listener);
+    listener->ssl_listener = NULL;
+  }
+  
   FlagSet(&listener->flags, LISTEN_ACTIVE);
   if (mask)
     ipmask_parse(mask, &listener->mask, &listener->mask_bits);

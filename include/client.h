@@ -56,6 +56,7 @@ struct Whowas;
 struct hostent;
 struct Privs;
 struct AuthRequest;
+struct SSLConnection;
 
 /*
  * Structures
@@ -165,6 +166,7 @@ enum Flag
     FLAG_DEBUG,                     /**< send global debug/anti-hack info */
     FLAG_ACCOUNT,                   /**< account name has been set */
     FLAG_HIDDENHOST,                /**< user's host is hidden */
+    FLAG_SSLCONN,                   /**< SSL Connection */
     FLAG_LAST_FLAG,                 /**< number of flags */
     FLAG_LOCAL_UMODES = FLAG_LOCOP, /**< First local mode flag */
     FLAG_GLOBAL_UMODES = FLAG_OPER  /**< First global mode flag */
@@ -231,6 +233,7 @@ struct Connection
   struct CapSet       con_active;    /**< Active capabilities (to us) */
   struct AuthRequest* con_auth;      /**< Auth request for client */
   const struct wline* con_wline;     /**< WebIRC authorization for client */
+  struct SSLConnection* con_ssl;     /**< SSL connection for client */
 };
 
 /** Magic constant to identify valid Connection structures. */
@@ -461,6 +464,8 @@ struct Client {
 #define con_auth(con)		((con)->con_auth)
 /** Get the WebIRC block (if any) used by the connection. */
 #define con_wline(con)          ((con)->con_wline)
+/** Get the ssl connection for the connection. */
+#define con_ssl(con)		((con)->con_ssl)
 
 #define STAT_CONNECTING         0x001 /**< connecting to another server */
 #define STAT_HANDSHAKE          0x002 /**< pass - server sent */
@@ -589,6 +594,8 @@ struct Client {
 #define IsAccount(x)            HasFlag(x, FLAG_ACCOUNT)
 /** Return non-zero if the client has set mode +x (hidden host). */
 #define IsHiddenHost(x)         HasFlag(x, FLAG_HIDDENHOST)
+/** Return non-zero if the client has set mode +S (SSL Connection). */
+#define IsSSLConn(x)            HasFlag(x, FLAG_SSLCONN)
 /** Return non-zero if the client has an active PING request. */
 #define IsPingSent(x)           HasFlag(x, FLAG_PINGSENT)
 
@@ -635,6 +642,9 @@ struct Client {
 #define SetAccount(x)           SetFlag(x, FLAG_ACCOUNT)
 /** Mark a client as having mode +x (hidden host). */
 #define SetHiddenHost(x)        SetFlag(x, FLAG_HIDDENHOST)
+/** Mark a client as having mode +S (SSL Connection). */
+#define SetSSLConn(x)           SetFlag(x, FLAG_SSLCONN)
+
 /** Mark a client as having a pending PING. */
 #define SetPingSent(x)          SetFlag(x, FLAG_PINGSENT)
 
@@ -668,6 +678,8 @@ struct Client {
 #define ClearServNotice(x)      ClrFlag(x, FLAG_SERVNOTICE)
 /** Remove mode +x (hidden host) from the client. */
 #define ClearHiddenHost(x)      ClrFlag(x, FLAG_HIDDENHOST)
+/** Remove mode +S (SSL Connection) from the client. */
+#define ClearSSLConn(x)         ClrFlag(x, FLAG_SSLCONN)
 /** Clear the client's pending PING flag. */
 #define ClearPingSent(x)        ClrFlag(x, FLAG_PINGSENT)
 /** Clear the client's HUB flag. */

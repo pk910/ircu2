@@ -57,6 +57,7 @@
 #include "s_misc.h"
 #include "s_serv.h" /* max_client_count */
 #include "send.h"
+#include "ssl.h"
 #include "struct.h"
 #include "supported.h"
 #include "sys.h"
@@ -395,6 +396,10 @@ int register_user(struct Client *cptr, struct Client *sptr)
                            cli_info(sptr), NumNick(cptr) /* two %s's */);
 
     IPcheck_connect_succeeded(sptr);
+    
+    if(cli_connect(sptr)->con_ssl) {
+      SetSSLConn(sptr);
+    }
   }
   else {
     struct Client *acptr = user->server;
@@ -499,7 +504,8 @@ static const struct UserMode {
   { FLAG_CHSERV,      'k' },
   { FLAG_DEBUG,       'g' },
   { FLAG_ACCOUNT,     'r' },
-  { FLAG_HIDDENHOST,  'x' }
+  { FLAG_HIDDENHOST,  'x' },
+  { FLAG_SSLCONN,     'S' }
 };
 
 /** Length of #userModeList. */
@@ -1069,6 +1075,12 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       case 'x':
         if (what == MODE_ADD)
 	  do_host_hiding = 1;
+      case 'S':
+        if (what == MODE_ADD)
+          SetSSLConn(sptr);
+        else
+          ClearSSLConn(sptr);
+        break;
 	break;
       case 'r':
 	if (*(p + 1) && (what == MODE_ADD)) {
@@ -1095,6 +1107,10 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       ClearLocOp(sptr);
     if (!FlagHas(&setflags, FLAG_ACCOUNT) && IsAccount(sptr))
       ClrFlag(sptr, FLAG_ACCOUNT);
+    if (!FlagHas(&setflags, FLAG_SSLCONN) && IsSSLConn(sptr))
+      ClrFlag(sptr, FLAG_SSLCONN);
+    else if (FlagHas(&setflags, FLAG_SSLCONN) && !IsSSLConn(sptr))
+      SetFlag(sptr, FLAG_SSLCONN);
     /*
      * new umode; servers can set it, local users cannot;
      * prevents users from /kick'ing or /mode -o'ing

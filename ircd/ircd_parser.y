@@ -177,6 +177,10 @@ static void free_slist(struct SLink **link) {
 %token TOK_IPV4 TOK_IPV6
 %token DNS
 %token WEBIRC
+%token SSL
+%token CERTFILE
+%token KEYFILE
+%token CAFILE
 /* and now a lot of privileges... */
 %token TPRIV_CHAN_LIMIT TPRIV_MODE_LCHAN TPRIV_DEOP_LCHAN TPRIV_WALK_LCHAN
 %token TPRIV_LOCAL_KILL TPRIV_REHASH TPRIV_RESTART TPRIV_DIE
@@ -201,7 +205,7 @@ static void free_slist(struct SLink **link) {
 %%
 /* Blocks in the config file... */
 blocks: blocks block | block;
-block: adminblock | generalblock | classblock | connectblock |
+block: adminblock | generalblock | classblock | connectblock | sslblock |
        uworldblock | operblock | portblock | jupeblock | clientblock |
        killblock | cruleblock | motdblock | featuresblock | quarantineblock |
        pseudoblock | iauthblock | webircblock | error ';';
@@ -406,6 +410,40 @@ admincontact: CONTACT '=' QSTRING ';'
 {
  MyFree(localConf.contact);
  localConf.contact = $3;
+};
+
+sslblock: SSL
+{
+  MyFree(localConf.sslcertfile);
+  MyFree(localConf.sslkeyfile);
+  MyFree(localConf.sslcafile);
+  localConf.sslcertfile = localConf.sslkeyfile = localConf.sslcafile = NULL;
+}
+'{' sslitems '}' ';'
+{
+  if (localConf.sslcertfile == NULL)
+    DupString(localConf.sslcertfile, "");
+  if (localConf.sslkeyfile == NULL)
+    DupString(localConf.sslkeyfile, "");
+  if (localConf.sslcafile == NULL)
+    DupString(localConf.sslcafile, "");
+};
+sslitems: sslitems sslitem | sslitem;
+sslitem: sslcertfile | sslkeyfile | sslcafile;
+sslcertfile: CERTFILE '=' QSTRING ';'
+{
+  MyFree(localConf.sslcertfile);
+  localConf.sslcertfile = $3;
+};
+sslkeyfile: KEYFILE '=' QSTRING ';'
+{
+  MyFree(localConf.sslkeyfile);
+  localConf.sslkeyfile = $3;
+};
+sslcafile: CAFILE '=' QSTRING ';'
+{
+  MyFree(localConf.sslcafile);
+  localConf.sslcafile = $3;
 };
 
 classblock: CLASS {
@@ -722,6 +760,7 @@ portblock: PORT '{' portitems '}' ';' {
       FlagSet(&flags_here, LISTEN_IPV6);
       break;
     }
+    
     if (link->flags & 65535)
       port = link->flags & 65535;
     add_listener(port, link->value.cp, pass, &flags_here);
@@ -733,7 +772,7 @@ portblock: PORT '{' portitems '}' ';' {
   port = 0;
 };
 portitems: portitem portitems | portitem;
-portitem: portnumber | portvhost | portvhostnumber | portmask | portserver | portwebirc | porthidden;
+portitem: portnumber | portvhost | portvhostnumber | portmask | portserver | portwebirc | portssl | porthidden;
 portnumber: PORT '=' address_family NUMBER ';'
 {
   if ($4 < 1 || $4 > 65535) {
@@ -784,6 +823,14 @@ portserver: SERVER '=' YES ';'
 } | SERVER '=' NO ';'
 {
   FlagClr(&listen_flags, LISTEN_SERVER);
+};
+
+portssl: SSL '=' YES ';'
+{
+  FlagSet(&listen_flags, LISTEN_SSL);
+} | SSL '=' NO ';'
+{
+  FlagClr(&listen_flags, LISTEN_SSL);
 };
 
 porthidden: HIDDEN '=' YES ';'

@@ -1,0 +1,66 @@
+Using SSL with IRCu
+
+SSL in IRCu is principally pretty easy. You just have to compile 
+the IRCd with the OpenSSL headers. This will be done automatically 
+if the headers are found by the ./configure script.
+
+To see if the configure script found the OpenSSL headers you just 
+have to look into the summary at the end:
+ OpenSSL:             yes
+If the header was not found (`no` output) we have to install the 
+required SSL header first. On Debian, this is quite simple: 
+just install the following packages using the build in apt packet 
+management: 
+apt-get install libssl-dev
+
+Now we have to create a valid certificate for the IRCu. For a "normal" 
+IRC network usually a self signed SSL certificate should be enough. 
+If you want to buy a certificate for 200€+ you can do that too, of course.
+
+If you want to put this money aside and create your own SSL certificate now, 
+you just have to type (example for openssl):
+openssl req -x509 -nodes -days 365 -newkey rsa:1024 -keyout ircd.key -out ircd.crt
+
+Generating a 1024 bit RSA private key
+....................................................++++++
+......++++++
+writing new private key to 'ircd.key'
+-----
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [AU]:
+State or Province Name (full name) [Some-State]:
+Locality Name (eg, city) []:
+Organization Name (eg, company) [Internet Widgits Pty Ltd]:
+Organizational Unit Name (eg, section) []:
+Common Name (eg, YOUR name) []: IMPORTANT: Here you have to enter the 
+                                           address of your IRC Server.
+                                           You can use FQHN form (x.y.net) or 
+                                           wildcarts (for all servers) *.y.net.
+Email Address []: 
+
+As we have a valid SSL certificate now, we have to tell the IRCu where it
+can be found. For this, we add a SSL block to the configuration (ircd.conf):
+ SSL {
+  certfile = "ircd.crt";
+  keyfile = "ircd.key";
+ };
+
+The path (in our case ./ircd.crt) is relative to the lib directory of your 
+IRCu installation. Now our IRCu should already be working with SSL. To use 
+this feature, we now have to add a SSL port:
+ Port {
+  ssl = yes;
+  port = 7776;
+ };
+
+According to RFC the port 6697 should also be used for SSL.
+ Port {
+  ssl = yes;
+  port = 6697;
+ };

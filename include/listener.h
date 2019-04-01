@@ -40,6 +40,7 @@
 
 struct Client;
 struct StatDesc;
+struct SSLListener;
 
 enum ListenerFlag {
   /** Port is currently accepting connections. */
@@ -54,6 +55,8 @@ enum ListenerFlag {
   LISTEN_IPV6,
   /** Port accepts only webirc connections. */
   LISTEN_WEBIRC,
+  /** Port listens for SSL connections. */
+  LISTEN_SSL,
   /** Sentinel for counting listener flags. */
   LISTEN_LAST_FLAG
 };
@@ -74,11 +77,13 @@ struct Listener {
   struct irc_in_addr mask;             /**< listener hostmask */
   struct Socket    socket_v4;          /**< describe IPv4 socket to event system */
   struct Socket    socket_v6;          /**< describe IPv6 socket to event system */
+  struct SSLListener* ssl_listener;    /**< ssl listener if listening for ssl connections */
 };
 
 #define listener_server(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_SERVER)
 #define listener_active(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_ACTIVE)
 #define listener_webirc(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_WEBIRC)
+#define listener_ssl(LISTENER)    FlagHas(&(LISTENER)->flags, LISTEN_SSL)
 
 extern void        add_listener(int port, const char* vaddr_ip, 
                                 const char* mask,
