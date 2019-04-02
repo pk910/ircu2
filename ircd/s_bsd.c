@@ -100,6 +100,7 @@ const char* const SELECT_ERROR_MSG    = "select error for %s: %s";
 const char* const SETBUFS_ERROR_MSG   = "error setting buffer size for %s: %s";
 const char* const SOCKET_ERROR_MSG    = "error creating socket for %s: %s";
 const char* const TOS_ERROR_MSG	      = "error setting TOS for %s: %s";
+const char* const SSL_ERROR_MSG	      = "error creating ssl connection for %s: %s";
 
 
 static void client_sock_callback(struct Event* ev);
@@ -269,6 +270,13 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
   
   if((aconf->flags & CONF_USESSL)) {
     struct SSLConnection *ssl = ssl_create_connect(cli_fd(cptr), cptr);
+    if(!ssl) {
+      cli_error(cptr) = ENOTSUP;
+      report_error(SSL_ERROR_MSG, cli_name(cptr), ENOTSUP);
+      close(cli_fd(cptr));
+      cli_fd(cptr) = -1;
+      return 0;
+    }
     if((aconf->flags & CONF_VERIFYCA))
       ssl_set_verifyca(ssl);
     if((aconf->verify_cert))
@@ -281,7 +289,6 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
       if(ssl_wantwrite(ssl))
         events |= SOCK_EVENT_WRITABLE;
       socket_events(&(cli_socket(cptr)), SOCK_ACTION_SET | events);
-      result = IO_BLOCKED;
     }
   }
   
@@ -510,6 +517,8 @@ void add_connection(struct Listener* listener, int fd) {
        /* 12345678901234567890123456789012345679012345678901234567890123456 */
   const char* const register_message =
          "ERROR :Unable to complete your registration\r\n";
+  const char* const sslfailed_message =
+         "ERROR :Unable to start ssl connection\r\n";
 
   assert(0 != listener);
 
@@ -589,6 +598,13 @@ void add_connection(struct Listener* listener, int fd) {
   if(listener_ssl(listener)) {
     struct Connection* con = cli_connect(new_client);
     con->con_ssl = ssl_start_handshake_listener(listener->ssl_listener, fd, new_client);
+    if(!con->con_ssl) {
+      ++ServerStats->is_bad_socket;
+      write(fd, sslfailed_message, strlen(sslfailed_message));
+      close(fd);
+      cli_fd(new_client) = -1;
+      return;
+    }
     unsigned int events = 0;
     if(ssl_wantread(con->con_ssl))
       events |= SOCK_EVENT_READABLE;

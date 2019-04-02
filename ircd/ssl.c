@@ -217,6 +217,13 @@ struct SSLListener *ssl_create_listener() {
   if(cafile && cafile[0] && SSL_CTX_load_verify_locations(listener->context, cafile, NULL) <= 0) {
     goto ssl_create_listener_failed;
   }
+  
+  /* security parameters */
+  const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION;
+  SSL_CTX_set_options(listener->context, flags);
+  
+  SSL_CTX_set_cipher_list(listener->context, "HIGH:!aNULL:!MD5:!RC4:@STRENGTH");
+  
   FlagSet(&listener->flags, SSLFLAG_READY);
   return listener;
 ssl_create_listener_failed:
@@ -430,6 +437,10 @@ void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprin
   memcpy(outcon->verifycert, fingerprint, fplen+1);
 }
 
+const char *ssl_get_current_cipher(struct SSLConnection *connection) {
+  return SSL_get_cipher_name(connection->session);
+}
+
 #else
 // fallback dummy implementation
 
@@ -437,7 +448,7 @@ void ssl_free_connection(struct SSLConnection *connection) {};
 void ssl_free_listener(struct SSLListener *listener) {};
 
 struct SSLListener *ssl_create_listener() { return NULL; };
-struct SSLConnection *ssl_create_connect(int fd, void *data) { return NULL };
+struct SSLConnection *ssl_create_connect(int fd, void *data) { return NULL; };
 
 struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data) { return NULL; };
 int ssl_start_handshake_connect(struct SSLConnection *connection) { return -1; };
@@ -449,5 +460,6 @@ int ssl_connection_flush(struct SSLConnection *connection) { return 0; };
 
 void ssl_set_verifyca(struct SSLConnection *connection) { };
 void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint) { };
+const char *ssl_get_current_cipher(struct SSLConnection *connection) { return NULL; };
 #endif
 

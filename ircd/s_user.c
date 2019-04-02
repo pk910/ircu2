@@ -383,6 +383,13 @@ int register_user(struct Client *cptr, struct Client *sptr)
     send_reply(sptr, RPL_MYINFO, cli_name(&me), version, infousermodes,
                infochanmodes, infochanmodeswithparams);
     send_supported(sptr);
+
+    if(cli_connect(sptr)->con_ssl) {
+      SetSSLConn(sptr);
+      sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :You are connected using SSL cipher \"%s\"", 
+                    sptr, ssl_get_current_cipher(cli_connect(sptr)->con_ssl));
+    }
+
     m_lusers(sptr, sptr, 1, parv);
     update_load();
     motd_signon(sptr);
@@ -396,10 +403,6 @@ int register_user(struct Client *cptr, struct Client *sptr)
                            cli_info(sptr), NumNick(cptr) /* two %s's */);
 
     IPcheck_connect_succeeded(sptr);
-    
-    if(cli_connect(sptr)->con_ssl) {
-      SetSSLConn(sptr);
-    }
   }
   else {
     struct Client *acptr = user->server;

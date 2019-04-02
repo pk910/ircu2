@@ -84,5 +84,6 @@ extern int ssl_connection_flush(struct SSLConnection *connection);
 
 extern void ssl_set_verifyca(struct SSLConnection *connection);
 extern void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint);
+extern const char *ssl_get_current_cipher(struct SSLConnection *connection);
 
 #endif /* INCLUDED_parse_h */
