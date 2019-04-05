@@ -34,9 +34,10 @@ struct Message;
 
 #define CONF_AUTOCONNECT        0x0001     /**< Autoconnect to a server */
 
-#define CONF_USESSL             0x0010     /**< Use SSL for Port or Connect block */
-#define CONF_VERIFYCA           0x0020     /**< Verify certificate is signed by CACERT (SSL block) 
-                                                for Connect block */
+#define CONF_USESSL             0x0008     /**< Use SSL for Port or Connect block */
+#define CONF_VERIFYCA           0x0010     /**< Verify certificate is signed by CACERT */
+#define CONF_VERIFYPEER         0x0020     /**< Verify client certificate (for listeners) */
+#define CONF_VERIFYCERT         0x0040     /**< Verify certificate fingerprint */
 
 #define CONF_UWORLD_OPER        0x0001     /**< UWorld server can remotely oper users */
 
@@ -49,6 +50,21 @@ struct Message;
 /*
  * Structures
  */
+
+/** SSL configuration */
+struct SSLConf {
+  char* certfile; /**< SSL certificate file. */
+  char* keyfile;  /**< SSL private key file. */
+  char* cafile;   /**< SSL CA file. */
+  char* certfp;   /**< SSL certificate fingerprint */
+  char* ciphers;  /**< SSL ciphers. */
+  char* options;  /**< SSL options. */
+  char* protocol; /**< SSL protocol. */
+  char* minproto; /**< SSL min protocol. */
+  char* maxproto; /**< SSL max protocol. */
+  char* curves;   /**< SSL curves. */
+  int flags;      /**< conf flags as defined above */
+};
 
 /** Configuration item to limit peer or client access. */
 struct ConfItem
@@ -77,6 +93,7 @@ struct ConfItem
   int flags;          /**< Additional modifiers for item. */
   int addrbits;       /**< Number of bits valid in ConfItem::address. */
   struct Privs privs; /**< Privileges for opers. */
+  struct SSLConf ssl; /**< SSL options for port & connect block */
   /** Used to detect if a privilege has been set by this ConfItem. */
   struct Privs privs_dirty;
 };
@@ -123,10 +140,7 @@ struct LocalConf {
   char*          location1;   /**< First line of location information. */
   char*          location2;   /**< Second line of location information. */
   char*          contact;     /**< Admin contact information. */
-  
-  char*          sslcertfile; /**< SSL certificate file. */
-  char*          sslkeyfile;  /**< SSL private key file. */
-  char*          sslcafile;   /**< SSL CA file. */
+  struct SSLConf ssl;         /**< SSL configuration. */
 };
 
 enum {

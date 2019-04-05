@@ -27,12 +27,16 @@
 #include "ssl.h"
 #include "class.h"
 #include "ircd.h"
+#include "ircd_alloc.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
+#include "ircd_string.h"
 #include "list.h"
 #include "msgq.h"
 #include "numeric.h"
+#include "s_auth.h"
+#include "s_bsd.h"
 #include "s_conf.h"
 #include "s_debug.h"
 #include "send.h"
@@ -46,10 +50,13 @@
 #endif
 
 #if defined(HAVE_OPENSSL_SSL_H)
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 
 struct SSLPendingConections {
   struct SSLConnection *connection;
   struct SSLPendingConections *next;
+  struct SSLListener *listener;
   
   void *data;
 };
@@ -66,29 +73,214 @@ static void ssl_init() {
   SSL_load_error_strings();
 }
 
+static void ssl_free_config(struct SSLConf *target) {
+  MyFree(target->certfile);
+  MyFree(target->keyfile);
+  MyFree(target->cafile);
+  MyFree(target->certfp);
+  MyFree(target->ciphers);
+  MyFree(target->options);
+  MyFree(target->protocol);
+  MyFree(target->minproto);
+  MyFree(target->maxproto);
+  MyFree(target->curves);
+}
+
 void ssl_free_connection(struct SSLConnection *connection) {
   SSL_CTX *context = NULL;
   if(FlagHas(&connection->flags, SSLFLAG_OUTGOING)) {
     struct SSLOutConnection *outconn = (struct SSLOutConnection *)connection;
     context = outconn->context;
     
-    if(outconn->verifycert)
-      free(outconn->verifycert);
+    ssl_free_config(&outconn->conf);
+    if(outconn->cacert)
+      X509_free(outconn->cacert);
   }
   SSL_shutdown(connection->session);
   SSL_free(connection->session);
+  
   if(context)
     SSL_CTX_free(context);
   free(connection);
 }
 
 void ssl_free_listener(struct SSLListener *listener) {
+  ssl_free_config(&listener->conf);
+  if(listener->cacert)
+    X509_free(listener->cacert);
   SSL_CTX_free(listener->context);
   free(listener);
 }
 
-static void ssl_handshake_completed(struct SSLConnection *connection, int success) {
+static void ssl_merge_config(struct SSLConf *target, const struct SSLConf *source) {
+  target->flags |= source->flags;
+  if(source->cafile) {
+    MyFree(target->cafile);
+    DupString(target->cafile, source->cafile);
+  }
+  if(source->certfp) {
+    MyFree(target->certfp);
+    DupString(target->certfp, source->certfp);
+  }
+  if(source->ciphers) {
+    MyFree(target->ciphers);
+    DupString(target->ciphers, source->ciphers);
+  }
+  if(source->options) {
+    MyFree(target->options);
+    DupString(target->options, source->options);
+  }
+  if(source->protocol) {
+    MyFree(target->protocol);
+    DupString(target->protocol, source->protocol);
+  }
+  if(source->minproto) {
+    MyFree(target->minproto);
+    DupString(target->minproto, source->minproto);
+  }
+  if(source->maxproto) {
+    MyFree(target->maxproto);
+    DupString(target->maxproto, source->maxproto);
+  }
+  if(source->curves) {
+    MyFree(target->curves);
+    DupString(target->curves, source->curves);
+  }
+}
+
+static void ssl_merge_cert_config(struct SSLConf *target, const struct SSLConf *source) {
+  if(source->certfile) {
+    MyFree(target->certfile);
+    DupString(target->certfile, source->certfile);
+  }
+  if(source->keyfile) {
+    MyFree(target->keyfile);
+    DupString(target->keyfile, source->keyfile);
+  }
+}
+
+static void ssl_apply_ctx_config(SSL_CTX *ctx, struct SSLConf *config) {
+  /* apply options */
+  SSL_CONF_CTX * const cctx = SSL_CONF_CTX_new();
+  SSL_CONF_CTX_set_ssl_ctx(cctx, ctx);
+  SSL_CONF_CTX_set_flags(cctx, SSL_CONF_FLAG_FILE);
+  if(config->ciphers)
+    SSL_CONF_cmd(cctx, "CipherString", config->ciphers);
+  if(config->options)
+    SSL_CONF_cmd(cctx, "Options", config->options);
+  if(config->protocol)
+    SSL_CONF_cmd(cctx, "Protocol", config->protocol);
+  if(config->minproto)
+    SSL_CONF_cmd(cctx, "MinProtocol", config->minproto);
+  if(config->maxproto)
+    SSL_CONF_cmd(cctx, "MaxProtocol", config->maxproto);
+  if(config->curves)
+    SSL_CONF_cmd(cctx, "Curves", config->curves);
+  
+  SSL_CONF_CTX_free(cctx);
+}
+
+static X509 *ssl_load_certificate(char *filename) {
+  BIO *certbio = BIO_new(BIO_s_file());
+  BIO_read_filename(certbio, filename);
+  X509 *cert = PEM_read_bio_X509(certbio, NULL, 0, NULL);
+  BIO_free(certbio);
+  return cert;
+}
+
+static int ssl_verify_cert_is_signed(X509 *cert, X509 *cacert, const char **errmsg) {
+  int res;
+  X509_STORE *store;
+  X509_STORE_CTX *ctx;
+
+  store = X509_STORE_new();
+  X509_STORE_add_cert(store, cacert);
+
+  ctx = X509_STORE_CTX_new();
+  X509_STORE_CTX_init(ctx, store, cert, NULL);
+
+  res = X509_verify_cert(ctx);
+  if(res <= 0 && errmsg) {
+    int err = X509_STORE_CTX_get_error(ctx);
+    *errmsg = X509_verify_cert_error_string(err);
+  }
+  if(res < 0)
+    res = 0;
+  
+  X509_STORE_CTX_free(ctx);
+  X509_STORE_free(store);
+  return res;
+}
+
+static int ssl_verify_peer_certificate(struct SSLListener *listener, X509 *peer_cert, const char **errmsg) {
+  int valid = 1;
+  
+  if(valid && (listener->conf.flags & CONF_VERIFYCA)) {
+    if(!listener->cacert) {
+      if(!listener->conf.cafile) {
+        if(errmsg)
+          *errmsg = "CA verification failed: cafile not set.";
+        valid = 0;
+      }
+      if(!(listener->cacert = ssl_load_certificate(listener->conf.cafile))) {
+        if(errmsg)
+          *errmsg = "CA verification failed: could not load cafile.";
+        valid = 0;
+      }
+    }
+    if(!ssl_verify_cert_is_signed(peer_cert, listener->cacert, errmsg))
+      valid = 0;
+  }
+  
+  return valid;
+}
+static int ssl_verify_server_certificate(struct SSLOutConnection *connection, X509 *server_cert, const char **errmsg) {
+  int valid = 1;
+  
+  if(valid && (connection->conf.flags & CONF_VERIFYCA)) {
+    if(!connection->cacert) {
+      if(!connection->conf.cafile) {
+        if(errmsg)
+          *errmsg = "CA verification failed: cafile not set.";
+        valid = 0;
+      }
+      if(!(connection->cacert = ssl_load_certificate(connection->conf.cafile))) {
+        if(errmsg)
+          *errmsg = "CA verification failed: could not load cafile.";
+        valid = 0;
+      }
+    }
+    if(!ssl_verify_cert_is_signed(server_cert, connection->cacert, errmsg))
+      valid = 0;
+  }
+  
+  return valid;
+}
+
+static int ssl_complete_client_outgoing(struct SSLOutConnection *connection, struct Client *cptr) {
+  const char *errmsg;
+  if(!ssl_verify_server_certificate(connection, SSL_get_peer_certificate(connection->session), &errmsg)) {
+    
+    return -1;
+  }
+  if(!completed_connection(cptr))
+    return -1;
+  return 0;
+}
+
+static int ssl_complete_client_incoming(struct SSLConnection *connection, struct SSLListener *listener, struct Client *cptr) {
+  const char *errmsg;
+  if(!ssl_verify_peer_certificate(listener, SSL_get_peer_certificate(connection->session), &errmsg)) {
+    
+    return -1;
+  }
+  start_auth(cptr);
+  return 0;
+}
+
+static int ssl_handshake_completed(struct SSLConnection *connection, int success) {
   struct SSLPendingConections *pending, *lastPending = NULL;
+  int ret = 0;
   for(pending = firstPendingConection; pending; pending = pending->next) {
     if(pending->connection == connection) {
       if(lastPending)
@@ -98,16 +290,19 @@ static void ssl_handshake_completed(struct SSLConnection *connection, int succes
       
       struct Client *cptr = (struct Client *) pending->data;
       if(success) {
-        if(FlagHas(&connection->flags, SSLFLAG_INCOMING))
-          start_auth(cptr);
-        else if(FlagHas(&connection->flags, SSLFLAG_OUTGOING))
-          completed_connection(cptr);
+        if(FlagHas(&connection->flags, SSLFLAG_INCOMING)) {
+          ret = ssl_complete_client_incoming(connection, pending->listener, cptr);
+        }
+        else if(FlagHas(&connection->flags, SSLFLAG_OUTGOING)) {
+          ret = ssl_complete_client_outgoing((struct SSLOutConnection *)connection, cptr);
+        }
       }
       free(pending);
       break;
     }
     lastPending = pending;
   }
+  return ret;
 }
 
 static int ssl_handshake_outgoing(struct SSLConnection *connection) {
@@ -120,8 +315,7 @@ static int ssl_handshake_outgoing(struct SSLConnection *connection) {
       FlagClr(&connection->flags, SSLFLAG_HANDSHAKE);
       FlagSet(&connection->flags, SSLFLAG_READY);
       
-      ssl_handshake_completed(connection, 1);
-      return 0;
+      return ssl_handshake_completed(connection, 1);
     case SSL_ERROR_WANT_READ:
       FlagSet(&connection->flags, SSLFLAG_HANDSHAKE_R);
       return 1;
@@ -133,14 +327,16 @@ static int ssl_handshake_outgoing(struct SSLConnection *connection) {
   }
 }
 
-struct SSLConnection *ssl_create_connect(int fd, void *data) {
-  struct SSLOutConnection *connection = malloc(sizeof(*connection));
+struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *localcfg) {
+  struct SSLOutConnection *connection = calloc(1, sizeof(*connection));
   struct SSLConnection *sslconn = (struct SSLConnection *)connection;
   struct SSLPendingConections *pending = NULL;
   
   if(!connection)
     return NULL;
-  connection->verifycert = NULL;
+  ssl_merge_config(&connection->conf, &conf_get_local()->ssl);
+  ssl_merge_config(&connection->conf, localcfg);
+  ssl_merge_cert_config(&connection->conf, localcfg);
   
   if(!ssl_is_initialized)
     ssl_init();
@@ -149,6 +345,23 @@ struct SSLConnection *ssl_create_connect(int fd, void *data) {
   if(!connection->context) {
     goto ssl_create_connect_failed;
   }
+  
+  ssl_apply_ctx_config(connection->context, &connection->conf);
+  if(connection->conf.certfile && connection->conf.keyfile) {
+    /* load client certificate */
+    if(SSL_CTX_use_certificate_file(connection->context, connection->conf.certfile, SSL_FILETYPE_PEM) <= 0) {
+      goto ssl_create_connect_failed;
+    }
+    /* load client keyfile */
+    if(SSL_CTX_use_PrivateKey_file(connection->context, connection->conf.keyfile, SSL_FILETYPE_PEM) <= 0) {
+      goto ssl_create_connect_failed;
+    }
+    /* check client certificate and keyfile */
+    if(!SSL_CTX_check_private_key(connection->context)) {
+      goto ssl_create_connect_failed;
+    }
+  }
+  
   connection->session = SSL_new(connection->context);
   if(!connection->session) {
     goto ssl_create_connect_failed;
@@ -180,7 +393,7 @@ int ssl_start_handshake_connect(struct SSLConnection *connection) {
   return ssl_handshake_outgoing(connection);
 }
 
-struct SSLListener *ssl_create_listener() {
+struct SSLListener *ssl_create_listener(struct SSLConf *localcfg) {
   if(!ssl_is_initialized)
     ssl_init();
   
@@ -190,9 +403,14 @@ struct SSLListener *ssl_create_listener() {
     goto ssl_create_listener_failed;
   }
   
-  char *certfile = conf_get_local()->sslcertfile;
-  char *keyfile = conf_get_local()->sslkeyfile;
-  char *cafile = conf_get_local()->sslcafile;
+  ssl_merge_config(&listener->conf, &conf_get_local()->ssl);
+  ssl_merge_cert_config(&listener->conf, &conf_get_local()->ssl);
+  ssl_merge_config(&listener->conf, localcfg);
+  ssl_merge_cert_config(&listener->conf, localcfg);
+  
+  char *certfile = listener->conf.certfile;
+  char *keyfile = listener->conf.keyfile;
+  char *cafile = listener->conf.cafile;
   
   if(!certfile) {
     goto ssl_create_listener_failed;
@@ -218,11 +436,7 @@ struct SSLListener *ssl_create_listener() {
     goto ssl_create_listener_failed;
   }
   
-  /* security parameters */
-  const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION;
-  SSL_CTX_set_options(listener->context, flags);
-  
-  SSL_CTX_set_cipher_list(listener->context, "HIGH:!aNULL:!MD5:!RC4:@STRENGTH");
+  ssl_apply_ctx_config(listener->context, &listener->conf);
   
   FlagSet(&listener->flags, SSLFLAG_READY);
   return listener;
@@ -240,8 +454,7 @@ static int ssl_handshake_incoming(struct SSLConnection *connection) {
       FlagClr(&connection->flags, SSLFLAG_HANDSHAKE);
       FlagSet(&connection->flags, SSLFLAG_READY);
       
-      ssl_handshake_completed(connection, 1);
-      return 0;
+      return ssl_handshake_completed(connection, 1);
     case SSL_ERROR_WANT_READ:
       FlagSet(&connection->flags, SSLFLAG_HANDSHAKE_R);
       return 1;
@@ -260,7 +473,7 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   if(!listener)
     return NULL;
   struct SSLPendingConections *pending = NULL;
-  struct SSLConnection *connection = malloc(sizeof(*connection));
+  struct SSLConnection *connection = calloc(1, sizeof(*connection));
   connection->session = SSL_new(listener->context);
   if(!connection->session) {
     goto ssl_start_handshake_listener_failed;
@@ -276,6 +489,7 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   if(!pending) {
     goto ssl_start_handshake_listener_failed;
   }
+  pending->listener = listener;
   pending->connection = connection;
   pending->next = firstPendingConection;
   firstPendingConection = pending;
@@ -354,7 +568,7 @@ static ssize_t ssl_writev(SSL *ssl, const struct iovec *vector, int count) {
   return SSL_write(ssl, buffer, bytes);
 }
 
-IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, char* buf, int len) {
+IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, const char* buf, int len) {
   return SSL_write(connection->session, buf, len);
 }
 
@@ -412,31 +626,6 @@ int ssl_connection_flush(struct SSLConnection *connection) {
   return 0;
 }
 
-void ssl_set_verifyca(struct SSLConnection *connection) {
-  // cannot verify ca when already ready
-  if(FlagHas(&connection->flags, SSLFLAG_READY))
-    return;
-
-  FlagSet(&connection->flags, SSLFLAG_VERIFYCA);
-}
-
-void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint) {
-  // outgoing connections only
-  if(!FlagHas(&connection->flags, SSLFLAG_OUTGOING))
-    return;
-  
-  // cannot verify ca when already ready
-  if(FlagHas(&connection->flags, SSLFLAG_READY))
-    return;
-  
-  struct SSLOutConnection *outcon = (struct SSLOutConnection *)connection;
-  int fplen = strlen(fingerprint);
-  if(outcon->verifycert)
-    free(outcon->verifycert);
-  outcon->verifycert = malloc(fplen+1);
-  memcpy(outcon->verifycert, fingerprint, fplen+1);
-}
-
 const char *ssl_get_current_cipher(struct SSLConnection *connection) {
   return SSL_get_cipher_name(connection->session);
 }
@@ -455,11 +644,9 @@ int ssl_start_handshake_connect(struct SSLConnection *connection) { return -1; }
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len) { return IO_FAILURE; };
 IOResult ssl_send_encrypt(struct SSLConnection *connection, struct MsgQ* buf, unsigned int *count_in, unsigned int *count_out) { return IO_FAILURE; };
-IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, char *buf, int len) { return IO_FAILURE; };
+IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, const char *buf, int len) { return IO_FAILURE; };
 int ssl_connection_flush(struct SSLConnection *connection) { return 0; };
 
-void ssl_set_verifyca(struct SSLConnection *connection) { };
-void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint) { };
 const char *ssl_get_current_cipher(struct SSLConnection *connection) { return NULL; };
 #endif
 

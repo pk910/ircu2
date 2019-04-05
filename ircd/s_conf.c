@@ -159,6 +159,16 @@ void free_conf(struct ConfItem *aconf)
   MyFree(aconf->passwd);
   MyFree(aconf->name);
   MyFree(aconf->hub_limit);
+  MyFree(aconf->ssl.certfp);
+  MyFree(aconf->ssl.certfile);
+  MyFree(aconf->ssl.keyfile);
+  MyFree(aconf->ssl.cafile);
+  MyFree(aconf->ssl.ciphers);
+  MyFree(aconf->ssl.options);
+  MyFree(aconf->ssl.protocol);
+  MyFree(aconf->ssl.minproto);
+  MyFree(aconf->ssl.maxproto);
+  MyFree(aconf->ssl.curves);
   MyFree(aconf);
   --GlobalConfCount;
 }

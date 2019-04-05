@@ -292,7 +292,7 @@ static struct Listener* find_listener(int port, const struct irc_in_addr *addr)
  * @param[in] flags Flags describing listener options.
  */
 void add_listener(int port, const char* vhost_ip, const char* mask,
-                  const struct ListenerFlags *flags)
+                  const struct ListenerFlags *flags, struct SSLConf *sslcfg)
 {
   struct Listener* listener;
   struct irc_in_addr vaddr;
@@ -324,7 +324,7 @@ void add_listener(int port, const char* vhost_ip, const char* mask,
   memcpy(&listener->flags, flags, sizeof(listener->flags));
   
   if(FlagHas(&listener->flags, LISTEN_SSL) && !listener->ssl_listener) {
-    listener->ssl_listener = ssl_create_listener();
+    listener->ssl_listener = ssl_create_listener(sslcfg);
   } else if(!FlagHas(&listener->flags, LISTEN_SSL) && listener->ssl_listener) {
     ssl_free_listener(listener->ssl_listener);
     listener->ssl_listener = NULL;

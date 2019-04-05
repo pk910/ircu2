@@ -43,6 +43,7 @@
 #include "s_user.h"
 #include "struct.h"
 #include "sys.h"
+#include "ssl.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <stdio.h>

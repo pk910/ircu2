@@ -62,6 +62,7 @@
 #include "s_misc.h"
 #include "s_user.h"
 #include "send.h"
+#include "ssl.h"
 
 #include <errno.h>
 #include <string.h>

@@ -269,7 +269,7 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
   }
   
   if((aconf->flags & CONF_USESSL)) {
-    struct SSLConnection *ssl = ssl_create_connect(cli_fd(cptr), cptr);
+    struct SSLConnection *ssl = ssl_create_connect(cli_fd(cptr), cptr, &aconf->ssl);
     if(!ssl) {
       cli_error(cptr) = ENOTSUP;
       report_error(SSL_ERROR_MSG, cli_name(cptr), ENOTSUP);
@@ -277,19 +277,7 @@ static int connect_inet(struct ConfItem* aconf, struct Client* cptr)
       cli_fd(cptr) = -1;
       return 0;
     }
-    if((aconf->flags & CONF_VERIFYCA))
-      ssl_set_verifyca(ssl);
-    if((aconf->verify_cert))
-      ssl_set_verifycert(ssl, aconf->verify_cert);
     cli_connect(cptr)->con_ssl = ssl;
-    if(ssl_handshake(ssl)) {
-      unsigned int events = 0;
-      if(ssl_wantread(ssl))
-        events |= SOCK_EVENT_READABLE;
-      if(ssl_wantwrite(ssl))
-        events |= SOCK_EVENT_WRITABLE;
-      socket_events(&(cli_socket(cptr)), SOCK_ACTION_SET | events);
-    }
   }
   
   cli_freeflag(cptr) |= FREEFLAG_SOCKET;
@@ -881,6 +869,21 @@ int connect_server(struct ConfItem* aconf, struct Client* by)
   hAddClient(cptr);
 /*    nextping = CurrentTime; */
 
+  struct SSLConnection *ssl = cli_connect(cptr)->con_ssl;
+  if(ssl) {
+    unsigned int events = 0;
+    if((s_state(&cli_socket(cptr)) == SS_CONNECTED) && ssl_start_handshake_connect(ssl) == 0)
+      events |= SOCK_EVENT_READABLE;
+    if(ssl_wantread(ssl))
+      events |= SOCK_EVENT_READABLE;
+    if(ssl_wantwrite(ssl))
+      events |= SOCK_EVENT_WRITABLE;
+    socket_events(&(cli_socket(cptr)), SOCK_ACTION_SET | events);
+    
+    if((s_state(&cli_socket(cptr)) == SS_CONNECTED))
+      return 1;
+  }
+
   return (s_state(&cli_socket(cptr)) == SS_CONNECTED) ?
     completed_connection(cptr) : 1;
 }
@@ -908,6 +911,7 @@ static void client_sock_callback(struct Event* ev)
   struct Connection* con;
   char *fmt = "%s";
   char *fallback = 0;
+  int sslret;
 
   assert(0 != ev_socket(ev));
   assert(0 != s_data(ev_socket(ev)));
@@ -930,8 +934,11 @@ static void client_sock_callback(struct Event* ev)
 
   case ET_CONNECT: /* socket connection completed */
     if(cli_connect(cptr)->con_ssl) {
-      if(ssl_start_handshake_connect(cli_connect(cptr)->con_ssl) < 0 || IsDead(cptr))
+      sslret = ssl_start_handshake_connect(cli_connect(cptr)->con_ssl);
+      if(sslret < 0 || IsDead(cptr))
         fallback = "SSL Handshake failed";
+      else if(sslret == 0)
+        socket_events(&(cli_socket(cptr)), SOCK_ACTION_ADD | SOCK_EVENT_READABLE);
     }
     else if (!completed_connection(cptr) || IsDead(cptr))
       fallback = cli_info(cptr);

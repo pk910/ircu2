@@ -74,7 +74,8 @@
   int yylex(void);
   /* Now all the globals we need :/... */
   int tping, tconn, maxlinks, sendq, port, invert, stringno, flags;
-  char *name, *pass, *host, *ip, *username, *origin, *hub_limit, *verify_cert;
+  char *name, *pass, *host, *ip, *username, *origin, *hub_limit;
+  struct SSLConf sslcfg;
   struct SLink *hosts;
   char *stringlist[MAX_STRINGS];
   struct ListenerFlags listen_flags;
@@ -178,11 +179,18 @@ static void free_slist(struct SLink **link) {
 %token DNS
 %token WEBIRC
 %token SSL
-%token CERTFILE
-%token KEYFILE
-%token CAFILE
-%token VERIFYCERT
-%token VERIFYCA
+%token SSL_CERTFILE
+%token SSL_KEYFILE
+%token SSL_CAFILE
+%token SSL_VERIFY_PEER
+%token SSL_VERIFY_CERT
+%token SSL_VERIFY_CA
+%token SSL_CIPHERS
+%token SSL_OPTIONS
+%token SSL_PROTOCOL
+%token SSL_MIN_PROTOCOL
+%token SSL_MAX_PROTOCOL
+%token SSL_CURVES
 /* and now a lot of privileges... */
 %token TPRIV_CHAN_LIMIT TPRIV_MODE_LCHAN TPRIV_DEOP_LCHAN TPRIV_WALK_LCHAN
 %token TPRIV_LOCAL_KILL TPRIV_REHASH TPRIV_RESTART TPRIV_DIE
@@ -416,36 +424,68 @@ admincontact: CONTACT '=' QSTRING ';'
 
 sslblock: SSL
 {
-  MyFree(localConf.sslcertfile);
-  MyFree(localConf.sslkeyfile);
-  MyFree(localConf.sslcafile);
-  localConf.sslcertfile = localConf.sslkeyfile = localConf.sslcafile = NULL;
+  MyFree(localConf.ssl.certfile);
+  MyFree(localConf.ssl.keyfile);
+  MyFree(localConf.ssl.cafile);
+  MyFree(localConf.ssl.ciphers);
+  MyFree(localConf.ssl.options);
+  MyFree(localConf.ssl.protocol);
+  MyFree(localConf.ssl.minproto);
+  MyFree(localConf.ssl.maxproto);
+  MyFree(localConf.ssl.curves);
+  localConf.ssl.certfile = localConf.ssl.keyfile = localConf.ssl.cafile = localConf.ssl.ciphers = localConf.ssl.options = NULL;
+  localConf.ssl.protocol = localConf.ssl.minproto = localConf.ssl.maxproto = localConf.ssl.curves = NULL;
+  localConf.ssl.flags = 0;
 }
 '{' sslitems '}' ';'
-{
-  if (localConf.sslcertfile == NULL)
-    DupString(localConf.sslcertfile, "");
-  if (localConf.sslkeyfile == NULL)
-    DupString(localConf.sslkeyfile, "");
-  if (localConf.sslcafile == NULL)
-    DupString(localConf.sslcafile, "");
-};
+{};
 sslitems: sslitems sslitem | sslitem;
-sslitem: sslcertfile | sslkeyfile | sslcafile;
-sslcertfile: CERTFILE '=' QSTRING ';'
+sslitem: sslcertfile | sslkeyfile | sslcafile | sslciphers | ssloptions | 
+         sslprotocol | sslminprotocol | sslmaxprotocol | sslcurves;
+sslcertfile: SSL_CERTFILE '=' QSTRING ';'
 {
-  MyFree(localConf.sslcertfile);
-  localConf.sslcertfile = $3;
+  MyFree(localConf.ssl.certfile);
+  localConf.ssl.certfile = $3;
 };
-sslkeyfile: KEYFILE '=' QSTRING ';'
+sslkeyfile: SSL_KEYFILE '=' QSTRING ';'
 {
-  MyFree(localConf.sslkeyfile);
-  localConf.sslkeyfile = $3;
+  MyFree(localConf.ssl.keyfile);
+  localConf.ssl.keyfile = $3;
 };
-sslcafile: CAFILE '=' QSTRING ';'
+sslcafile: SSL_CAFILE '=' QSTRING ';'
 {
-  MyFree(localConf.sslcafile);
-  localConf.sslcafile = $3;
+  MyFree(localConf.ssl.cafile);
+  localConf.ssl.cafile = $3;
+};
+sslciphers: SSL_CIPHERS '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.ciphers);
+  localConf.ssl.ciphers = $3;
+};
+ssloptions: SSL_OPTIONS '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.options);
+  localConf.ssl.options = $3;
+};
+sslprotocol: SSL_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.protocol);
+  localConf.ssl.protocol = $3;
+};
+sslminprotocol: SSL_MIN_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.minproto);
+  localConf.ssl.minproto = $3;
+};
+sslmaxprotocol: SSL_MAX_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.maxproto);
+  localConf.ssl.maxproto = $3;
+};
+sslcurves: SSL_CURVES '=' QSTRING ';'
+{
+  MyFree(localConf.ssl.curves);
+  localConf.ssl.curves = $3;
 };
 
 classblock: CLASS {
@@ -506,6 +546,7 @@ classusermode: USERMODE '=' QSTRING ';'
 connectblock: CONNECT
 {
  flags = CONF_AUTOCONNECT;
+ memset(&sslcfg, 0, sizeof(sslcfg));
 } '{' connectitems '}' ';'
 {
  struct ConfItem *aconf = NULL;
@@ -534,8 +575,8 @@ connectblock: CONNECT
     */
    aconf->maximum = (hub_limit != NULL && maxlinks == 0) ? 65535 : maxlinks;
    aconf->hub_limit = hub_limit;
-   aconf->verify_cert = verify_cert;
    aconf->flags = flags;
+   memcpy(&aconf->ssl, &sslcfg, sizeof(sslcfg));
    lookup_confhost(aconf);
  }
  if (!aconf) {
@@ -544,9 +585,17 @@ connectblock: CONNECT
    MyFree(host);
    MyFree(origin);
    MyFree(hub_limit);
-   MyFree(verify_cert);
+   MyFree(sslcfg.certfp);
+   MyFree(sslcfg.certfile);
+   MyFree(sslcfg.cafile);
+   MyFree(sslcfg.ciphers);
+   MyFree(sslcfg.options);
+   MyFree(sslcfg.protocol);
+   MyFree(sslcfg.minproto);
+   MyFree(sslcfg.maxproto);
+   MyFree(sslcfg.curves);
  }
- name = pass = host = origin = hub_limit = verify_cert = NULL;
+ name = pass = host = origin = hub_limit = NULL;
  c_class = NULL;
  port = flags = maxlinks = 0;
 };
@@ -554,7 +603,10 @@ connectitems: connectitem connectitems | connectitem;
 connectitem: connectname | connectpass | connectclass | connecthost
               | connectport | connectvhost | connectleaf | connecthub
               | connecthublimit | connectmaxhops | connectauto
-              | connectssl | connectverifyca | connectverifycert;
+              | connectssl | connectsslverifyca | connectsslverifycert
+              | connectsslcertfile | connectsslcafile | connectsslciphers
+              | connectssloptions | connectsslprotocol | connectsslminprotocol
+              | connectsslmaxprotocol | connectsslcurves;
 connectname: NAME '=' QSTRING ';'
 {
  MyFree(name);
@@ -608,12 +660,58 @@ connectauto: AUTOCONNECT '=' YES ';' { flags |= CONF_AUTOCONNECT; }
  | AUTOCONNECT '=' NO ';' { flags &= ~CONF_AUTOCONNECT; };
 connectssl: SSL '=' YES ';' { flags |= CONF_USESSL; }
  | SSL '=' NO ';' { flags &= ~CONF_USESSL; };
-connectverifyca: VERIFYCA '=' YES ';' { flags |= CONF_VERIFYCA; }
- | VERIFYCA '=' NO ';' { flags &= ~CONF_VERIFYCA; };
-connectverifycert: VERIFYCERT '=' QSTRING ';'
+connectsslverifyca: SSL_VERIFY_CA '=' YES ';'
 {
-  MyFree(verify_cert);
-  verify_cert = $3;
+  sslcfg.flags |= CONF_VERIFYCA;
+} | WEBIRC '=' NO ';'
+{
+  sslcfg.flags &= ~CONF_VERIFYCA;
+};
+connectsslverifycert: SSL_VERIFY_CERT '=' QSTRING ';'
+{
+  MyFree(sslcfg.certfp);
+  sslcfg.certfp = $3;
+  sslcfg.flags |= CONF_VERIFYCERT;
+};
+connectsslcertfile: SSL_CERTFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.certfile);
+  sslcfg.certfile = $3;
+};
+connectsslcafile: SSL_CAFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.cafile);
+  sslcfg.cafile = $3;
+};
+connectsslciphers: SSL_CIPHERS '=' QSTRING ';'
+{
+  MyFree(sslcfg.ciphers);
+  sslcfg.ciphers = $3;
+};
+connectssloptions: SSL_OPTIONS '=' QSTRING ';'
+{
+  MyFree(sslcfg.options);
+  sslcfg.options = $3;
+};
+connectsslprotocol: SSL_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.protocol);
+  sslcfg.protocol = $3;
+};
+connectsslminprotocol: SSL_MIN_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.minproto);
+  sslcfg.minproto = $3;
+};
+connectsslmaxprotocol: SSL_MAX_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.maxproto);
+  sslcfg.maxproto = $3;
+};
+connectsslcurves: SSL_CURVES '=' QSTRING ';'
+{
+  MyFree(sslcfg.curves);
+  sslcfg.curves = $3;
 };
 
 uworldblock: UWORLD '{' uworlditems '}' ';';
@@ -749,7 +847,9 @@ address_family:
     ;
 
 /* The port block... */
-portblock: PORT '{' portitems '}' ';' {
+portblock: PORT {
+  memset(&sslcfg, 0, sizeof(sslcfg));
+} '{' portitems '}' ';' {
   struct ListenerFlags flags_here;
   struct SLink *link;
   if (hosts == NULL) {
@@ -777,16 +877,28 @@ portblock: PORT '{' portitems '}' ';' {
     
     if (link->flags & 65535)
       port = link->flags & 65535;
-    add_listener(port, link->value.cp, pass, &flags_here);
+    add_listener(port, link->value.cp, pass, &flags_here, &sslcfg);
   }
   free_slist(&hosts);
   MyFree(pass);
   memset(&listen_flags, 0, sizeof(listen_flags));
   pass = NULL;
   port = 0;
+  MyFree(sslcfg.certfile);
+  MyFree(sslcfg.keyfile);
+  MyFree(sslcfg.cafile);
+  MyFree(sslcfg.ciphers);
+  MyFree(sslcfg.options);
+  MyFree(sslcfg.protocol);
+  MyFree(sslcfg.minproto);
+  MyFree(sslcfg.maxproto);
+  MyFree(sslcfg.curves);
 };
 portitems: portitem portitems | portitem;
-portitem: portnumber | portvhost | portvhostnumber | portmask | portserver | portwebirc | portssl | porthidden;
+portitem: portnumber | portvhost | portvhostnumber | portmask | portserver | portwebirc | 
+          portssl | porthidden | portsslcertfile | portsslkeyfile | portsslcafile |
+          portsslciphers | portssloptions | portsslprotocol | portsslminprotocol |
+          portsslmaxprotocol | portsslcurves | portsslverifypeer | portsslverifyca;
 portnumber: PORT '=' address_family NUMBER ';'
 {
   if ($4 < 1 || $4 > 65535) {
@@ -861,6 +973,66 @@ portwebirc: WEBIRC '=' YES ';'
 } | WEBIRC '=' NO ';'
 {
   FlagClr(&listen_flags, LISTEN_WEBIRC);
+};
+
+portsslcertfile: SSL_CERTFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.certfile);
+  sslcfg.certfile = $3;
+};
+portsslkeyfile: SSL_KEYFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.keyfile);
+  sslcfg.keyfile = $3;
+};
+portsslcafile: SSL_CAFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.cafile);
+  sslcfg.cafile = $3;
+};
+portsslciphers: SSL_CIPHERS '=' QSTRING ';'
+{
+  MyFree(sslcfg.ciphers);
+  sslcfg.ciphers = $3;
+};
+portssloptions: SSL_OPTIONS '=' QSTRING ';'
+{
+  MyFree(sslcfg.options);
+  sslcfg.options = $3;
+};
+portsslprotocol: SSL_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.protocol);
+  sslcfg.protocol = $3;
+};
+portsslminprotocol: SSL_MIN_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.minproto);
+  sslcfg.minproto = $3;
+};
+portsslmaxprotocol: SSL_MAX_PROTOCOL '=' QSTRING ';'
+{
+  MyFree(sslcfg.maxproto);
+  sslcfg.maxproto = $3;
+};
+portsslcurves: SSL_CURVES '=' QSTRING ';'
+{
+  MyFree(sslcfg.curves);
+  sslcfg.curves = $3;
+};
+portsslverifypeer: SSL_VERIFY_PEER '=' YES ';'
+{
+  sslcfg.flags |= CONF_VERIFYPEER;
+} | WEBIRC '=' NO ';'
+{
+  sslcfg.flags &= ~CONF_VERIFYPEER;
+};
+portsslverifyca: SSL_VERIFY_CA '=' YES ';'
+{
+  sslcfg.flags |= CONF_VERIFYCA;
+} | WEBIRC '=' NO ';'
+{
+  sslcfg.flags &= ~CONF_VERIFYCA;
 };
 
 clientblock: CLIENT

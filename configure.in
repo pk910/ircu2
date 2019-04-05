@@ -232,7 +232,7 @@ else
   openssl_deps="-lcrypto"
 fi
 AC_CHECK_HEADERS(openssl/ssl.h, [ 
-  AC_CHECK_LIB([ssl],[SSL_library_init], [
+  AC_CHECK_LIB([ssl],[OPENSSL_init_ssl], [
     LIBS="$LIBS -lssl $openssl_deps"
   ], [], $openssl_deps)
 ])

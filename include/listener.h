@@ -41,6 +41,7 @@
 struct Client;
 struct StatDesc;
 struct SSLListener;
+struct SSLConf;
 
 enum ListenerFlag {
   /** Port is currently accepting connections. */
@@ -87,7 +88,8 @@ struct Listener {
 
 extern void        add_listener(int port, const char* vaddr_ip, 
                                 const char* mask,
-                                const struct ListenerFlags *flags);
+                                const struct ListenerFlags *flags,
+                                struct SSLConf *sslcfg);
 extern void        close_listener(struct Listener* listener);
 extern void        close_listeners(void);
 extern void        count_listener_memory(int* count_out, size_t* size_out);

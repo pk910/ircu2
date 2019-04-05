@@ -18,7 +18,7 @@ IRC network usually a self signed SSL certificate should be enough.
 If you want to buy a certificate for 200€+ you can do that too, of course.
 
 If you want to put this money aside and create your own SSL certificate now, 
-you just have to type (example for openssl):
+you just have to type (example for a rsa key with openssl):
 openssl req -x509 -nodes -days 365 -newkey rsa:1024 -keyout ircd.key -out ircd.crt
 
 Generating a 1024 bit RSA private key
@@ -44,11 +44,16 @@ Common Name (eg, YOUR name) []: IMPORTANT: Here you have to enter the
                                            wildcarts (for all servers) *.y.net.
 Email Address []: 
 
+To use generate a secp256k1 key use this: (see ECDH-ECDSA prefix in cipher notice)
+openssl ecparam -out ircd.key -name secp256k1 -genkey
+openssl req -x509 -new -key ircd.key -keyform PEM -out ircd.crt -outform PEM -days 365
+
+
 As we have a valid SSL certificate now, we have to tell the IRCu where it
 can be found. For this, we add a SSL block to the configuration (ircd.conf):
  SSL {
-  certfile = "ircd.crt";
-  keyfile = "ircd.key";
+  ssl_certfile = "ircd.crt";
+  ssl_keyfile = "ircd.key";
  };
 
 The path (in our case ./ircd.crt) is relative to the lib directory of your 
@@ -79,3 +84,22 @@ server port, too.
   ssl = yes;
   port = 6697;
  };
+
+Advanced ssl options can be configured:
+ SSL {
+  ssl_certfile = "ircd.crt";
+  ssl_keyfile = "ircd.key";
+  ssl_cafile = "ca.crt";
+  ssl_verify_cert = "00:00:00";
+  ssl_verify_ca = yes;
+  ssl_ciphers = "HIGH:!aNULL:!MD5:!RC4:@STRENGTH";
+  ssl_options = "-Compression";
+  ssl_protocol = "ALL,-SSLv3";
+  ssl_min_protocol = "TLSv1";
+  ssl_max_protocol = "DTLSv1.2";
+  ssl_curves = "secp256k1";
+ };
+
+Each of these options can be set within a Port / Connect block, too.
+Options specified in a Port / Connect block override the global options in 
+the SSL block.

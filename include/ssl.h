@@ -5,6 +5,7 @@
 #ifndef INCLUDED_ssl_h
 #define INCLUDED_ssl_h
 #include "ircd_osdep.h"
+#include "s_conf.h"
 
 enum SSLFlag {
   SSLFLAG_INCOMING,
@@ -34,8 +35,10 @@ struct SSLConnection {
 struct SSLOutConnection {
   struct SSLFlags flags;
   SSL *session;
+  
   SSL_CTX *context;
-  char *verifycert;
+  struct SSLConf conf;
+  X509 *cacert;
 };
 
 struct SSLListener {
@@ -43,6 +46,9 @@ struct SSLListener {
   
   SSL *listener;
   SSL_CTX *context;
+  
+  struct SSLConf conf;
+  X509 *cacert;
 };
 
 #else
@@ -71,19 +77,17 @@ struct SSLListener {
 extern void ssl_free_connection(struct SSLConnection *connection);
 extern void ssl_free_listener(struct SSLListener *listener);
 
-extern struct SSLListener *ssl_create_listener();
-extern struct SSLConnection *ssl_create_connect(int fd, void *data);
+extern struct SSLListener *ssl_create_listener(struct SSLConf *config);
+extern struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *config);
 
 extern struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data);
 extern int ssl_start_handshake_connect(struct SSLConnection *connection);
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len);
 IOResult ssl_send_encrypt(struct SSLConnection *connection, struct MsgQ* buf, unsigned int *count_in, unsigned int *count_out);
-IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, char *buf, int len);
+IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, const char *buf, int len);
 extern int ssl_connection_flush(struct SSLConnection *connection);
 
-extern void ssl_set_verifyca(struct SSLConnection *connection);
-extern void ssl_set_verifycert(struct SSLConnection *connection, const char *fingerprint);
 extern const char *ssl_get_current_cipher(struct SSLConnection *connection);
 
 #endif /* INCLUDED_parse_h */
