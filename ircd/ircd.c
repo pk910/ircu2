@@ -315,16 +315,149 @@ static void try_connections(struct Event* ev) {
   timer_add(&connect_timer, try_connections, 0, TT_ABSOLUTE, next);
 }
 
+/** Check for clients that have not sent a ping response recently.
+ * Reschedules itself to run again at the appropriate time.
+ * @param[in] ev Timer event (ignored).
+ */
+static void check_client_ping(struct Client *cptr, int *next_check) {
+  int expire     = 0;
+  int max_ping   = 0;
+  
+  /* We don't need to check zombies here */
+  if (IsNotConn(cptr)) {
+    assert(IsUser(cptr));
+    /* for now: reap after fixed time (10 minutes) */
+    if ((CurrentTime - cli_user(cptr)->last) >= 600)
+      SetFlag(cptr, FLAG_DEADSOCKET);
+    else
+      return;
+  }
+
+  assert(&me != cptr);  /* I should never be in the local client array! */
+ 
+
+  /* Remove dead clients. */
+  if (IsDead(cptr)) {
+    exit_client(cptr, cptr, &me);
+    return;
+  }
+
+  Debug((DEBUG_DEBUG, "check_pings(%s)=status:%s current: %d",
+   cli_name(cptr),
+   IsPingSent(cptr) ? "[Ping Sent]" : "[]", 
+   (int)(CurrentTime - cli_lasttime(cptr))));
+
+  /* Unregistered clients pingout after max_ping seconds, they don't
+   * get given a second chance - if they were then people could not quite
+   * finish registration and hold resources without being subject to k/g
+   * lines
+   */
+  if (!IsRegistered(cptr)) {
+    assert(!IsServer(cptr));
+    max_ping = feature_int(FEAT_CONNECTTIMEOUT);
+    /* If client authorization time has expired, ask auth whether they
+     * should be checked again later. */
+    if ((CurrentTime-cli_firsttime(cptr) >= max_ping)
+        && auth_ping_timeout(cptr))
+      return;
+    if (!IsRegistered(cptr)) {
+      /* OK, they still have enough time left, so we'll just skip to the
+      * next client.  Set the next check to be when their time is up, if
+      * that's before the currently scheduled next check -- hikari */
+      expire = cli_firsttime(cptr) + max_ping;
+      if (expire < *next_check)
+        *next_check = expire;
+      return;
+    }
+  }
+
+  max_ping = client_get_ping(cptr);
+
+  /* If it's a server and we have not sent an AsLL lately, do so. */
+  if (IsServer(cptr)) {
+    if (CurrentTime - cli_serv(cptr)->asll_last >= max_ping) {
+      char *asll_ts;
+
+      SetPingSent(cptr);
+      cli_serv(cptr)->asll_last = CurrentTime;
+      expire = cli_serv(cptr)->asll_last + max_ping;
+      asll_ts = militime_float(NULL);
+      sendcmdto_prio_one(&me, CMD_PING, cptr, "!%s %s %s", asll_ts,
+                         cli_name(cptr), asll_ts);
+    }
+
+    expire = cli_serv(cptr)->asll_last + max_ping;
+    if (expire < *next_check)
+      *next_check = expire;
+  }
+
+  /* Ok, the thing that will happen most frequently, is that someone will
+   * have sent something recently.  Cover this first for speed.
+   * -- 
+   * If it's an unregistered client and hasn't managed to register within
+   * max_ping then it's obviously having problems (broken client) or it's
+   * just up to no good, so we won't skip it, even if its been sending
+   * data to us. 
+   * -- hikari
+   */
+  if ((CurrentTime-cli_lasttime(cptr) < max_ping) && IsRegistered(cptr)) {
+    expire = cli_lasttime(cptr) + max_ping;
+    if (expire < *next_check) 
+      *next_check = expire;
+    return;
+  }
+
+  /* Quit the client after max_ping*2 - they should have answered by now */
+  if (CurrentTime-cli_lasttime(cptr) >= (max_ping*2) )
+  {
+    /* If it was a server, then tell ops about it. */
+    if (IsServer(cptr) || IsConnecting(cptr) || IsHandshake(cptr))
+      sendto_opmask_butone(0, SNO_OLDSNO,
+                           "No response from %s, closing link",
+                           cli_name(cptr));
+    /*
+     * Keep client structure around when a user pings out, so that they can
+     * reconnect to it later
+     */
+    if (IsUser(cptr) && IsZombieUser(cptr) && zombie_client(&me, &me, cptr)) {
+      ircd_strncpy(cli_errinfo(cptr), "Ping timeout", ERRINFOLEN);
+      return;
+    }
+    
+    exit_client_msg(cptr, cptr, &me, "Ping timeout");
+    return;
+  }
+  
+  if (!IsPingSent(cptr))
+  {
+    /* If we haven't PINGed the connection and we haven't heard from it in a
+     * while, PING it to make sure it is still alive.
+     */
+    SetPingSent(cptr);
+
+    /* If we're late in noticing don't hold it against them :) */
+    cli_lasttime(cptr) = CurrentTime - max_ping;
+    
+    if (IsUser(cptr))
+      sendrawto_one(cptr, MSG_PING " :%s", cli_name(&me));
+    else
+      sendcmdto_prio_one(&me, CMD_PING, cptr, ":%s", cli_name(&me));
+  }
+  
+  expire = cli_lasttime(cptr) + max_ping * 2;
+  if (expire < *next_check)
+    *next_check=expire;
+}
 
 /** Check for clients that have not sent a ping response recently.
  * Reschedules itself to run again at the appropriate time.
  * @param[in] ev Timer event (ignored).
  */
 static void check_pings(struct Event* ev) {
-  int expire     = 0;
   int next_check = CurrentTime;
-  int max_ping   = 0;
   int i;
+  struct Client *cptr;
+  void *zptr = NULL;
 
   assert(ET_EXPIRE == ev_type(ev));
   assert(0 != ev_timer(ev));
@@ -333,136 +466,20 @@ static void check_pings(struct Event* ev) {
   
   /* Scan through the client table */
   for (i=0; i <= HighestFd; i++) {
-    struct Client *cptr = LocalClientArray[i];
+    cptr = LocalClientArray[i];
    
     if (!cptr)
       continue;
-     
-    /* We don't need to check zombies here */
-    if (IsNotConn(cptr)) {
-      assert(IsUser(cptr));
-      /* for now: reap after fixed time (15 minutes) */
-      if ((CurrentTime - cli_user(cptr)->last) >= 900) {
-        SetFlag(cptr, FLAG_DEADSOCKET);
-        /* this will be used as exit message */
-        ircd_strncpy(cli_info(cptr), "Ping timeout", REALLEN);
-      } else
-        continue;
-    }
-
-    assert(&me != cptr);  /* I should never be in the local client array! */
-   
-
-    /* Remove dead clients. */
-    if (IsDead(cptr)) {
-      exit_client(cptr, cptr, &me, cli_info(cptr));
-      continue;
-    }
-
-    Debug((DEBUG_DEBUG, "check_pings(%s)=status:%s current: %d",
-	   cli_name(cptr),
-	   IsPingSent(cptr) ? "[Ping Sent]" : "[]", 
-	   (int)(CurrentTime - cli_lasttime(cptr))));
-
-    /* Unregistered clients pingout after max_ping seconds, they don't
-     * get given a second chance - if they were then people could not quite
-     * finish registration and hold resources without being subject to k/g
-     * lines
-     */
-    if (!IsRegistered(cptr)) {
-      assert(!IsServer(cptr));
-      max_ping = feature_int(FEAT_CONNECTTIMEOUT);
-      /* If client authorization time has expired, ask auth whether they
-       * should be checked again later. */
-      if ((CurrentTime-cli_firsttime(cptr) >= max_ping)
-          && auth_ping_timeout(cptr))
-        continue;
-      if (!IsRegistered(cptr)) {
-	/* OK, they still have enough time left, so we'll just skip to the
-	 * next client.  Set the next check to be when their time is up, if
-	 * that's before the currently scheduled next check -- hikari */
-	expire = cli_firsttime(cptr) + max_ping;
-	if (expire < next_check)
-	  next_check = expire;
-	continue;
-      }
-    }
-
-    max_ping = client_get_ping(cptr);
-
-    /* If it's a server and we have not sent an AsLL lately, do so. */
-    if (IsServer(cptr)) {
-      if (CurrentTime - cli_serv(cptr)->asll_last >= max_ping) {
-        char *asll_ts;
-
-        SetPingSent(cptr);
-        cli_serv(cptr)->asll_last = CurrentTime;
-        expire = cli_serv(cptr)->asll_last + max_ping;
-        asll_ts = militime_float(NULL);
-        sendcmdto_prio_one(&me, CMD_PING, cptr, "!%s %s %s", asll_ts,
-                           cli_name(cptr), asll_ts);
-      }
-
-      expire = cli_serv(cptr)->asll_last + max_ping;
-      if (expire < next_check)
-        next_check = expire;
-    }
-
-    /* Ok, the thing that will happen most frequently, is that someone will
-     * have sent something recently.  Cover this first for speed.
-     * -- 
-     * If it's an unregistered client and hasn't managed to register within
-     * max_ping then it's obviously having problems (broken client) or it's
-     * just up to no good, so we won't skip it, even if its been sending
-     * data to us. 
-     * -- hikari
-     */
-    if ((CurrentTime-cli_lasttime(cptr) < max_ping) && IsRegistered(cptr)) {
-      expire = cli_lasttime(cptr) + max_ping;
-      if (expire < next_check) 
-	next_check = expire;
-      continue;
-    }
-
-    /* Quit the client after max_ping*2 - they should have answered by now */
-    if (CurrentTime-cli_lasttime(cptr) >= (max_ping*2) )
-    {
-      /* If it was a server, then tell ops about it. */
-      if (IsServer(cptr) || IsConnecting(cptr) || IsHandshake(cptr))
-        sendto_opmask_butone(0, SNO_OLDSNO,
-                             "No response from %s, closing link",
-                             cli_name(cptr));
-      /*
-       * Keep client structure around when a user pings out, so that they can
-       * reconnect to it later
-       */
-      if (IsUser(cptr) && IsAccount(cptr)) {
-        zombie_client(&me, &me, cptr);
-        continue;
-      }
-      exit_client_msg(cptr, cptr, &me, "Ping timeout");
-      continue;
-    }
     
-    if (!IsPingSent(cptr))
-    {
-      /* If we haven't PINGed the connection and we haven't heard from it in a
-       * while, PING it to make sure it is still alive.
-       */
-      SetPingSent(cptr);
-
-      /* If we're late in noticing don't hold it against them :) */
-      cli_lasttime(cptr) = CurrentTime - max_ping;
-      
-      if (IsUser(cptr))
-        sendrawto_one(cptr, MSG_PING " :%s", cli_name(&me));
-      else
-        sendcmdto_prio_one(&me, CMD_PING, cptr, ":%s", cli_name(&me));
-    }
+    check_client_ping(cptr, &next_check);
+  }
+  /* Scan through the local zombie client table */
+  
+  while(cptr = get_local_zombie_clients(&zptr)) {
+    check_client_ping(cptr, &next_check);
     
-    expire = cli_lasttime(cptr) + max_ping * 2;
-    if (expire < next_check)
-      next_check=expire;
+    if(!zptr)
+      break;
   }
   
   assert(next_check >= CurrentTime);
@@ -472,7 +489,6 @@ static void check_pings(struct Event* ev) {
   
   timer_add(&ping_timer, check_pings, 0, TT_ABSOLUTE, next_check);
 }
-
 
 /** Parse command line arguments.
  * Global variables are updated to reflect the arguments.

@@ -109,7 +109,7 @@ int m_webirc(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   const char *ip;
 
   if (!IsWebircPort(cptr))
-    return exit_client(cptr, cptr, &me, "Use a different port");
+    return exit_client_msg(cptr, cptr, &me, "Use a different port");
 
   if (parc < 5)
     return need_more_params(sptr, "WEBIRC");
@@ -119,7 +119,7 @@ int m_webirc(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   ip = parv[4];
 
   if (EmptyString(ip))
-    return exit_client(cptr, cptr, &me, "WEBIRC needs IP address");
+    return exit_client_msg(cptr, cptr, &me, "WEBIRC needs IP address");
 
   if (!(wline = find_webirc(&cli_ip(sptr), passwd)))
     return exit_client_msg(cptr, cptr, &me, "WEBIRC not authorized");
@@ -130,6 +130,6 @@ int m_webirc(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   int res = auth_spoof_user(cli_auth(cptr), NULL, hostname, ip);
   if (res > 0)
-    return exit_client(cptr, cptr, &me, "WEBIRC invalid spoof");
+    return exit_client_msg(cptr, cptr, &me, "WEBIRC invalid spoof");
   return res;
 }

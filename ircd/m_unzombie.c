@@ -25,11 +25,13 @@
 #include "config.h"
 
 #include "client.h"
+#include "hash.h"
 #include "ircd.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "msg.h"
+#include "numeric.h"
 #include "numnicks.h"
 #include "s_debug.h"
 #include "s_misc.h"
@@ -38,6 +40,36 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * m_unzombie - client message handler 
+ *
+ * parv[0]        = sender prefix
+ * parv[parc - 1] = comment
+ */
+int m_unzombie(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  assert(0 != cptr);
+  assert(0 != sptr);
+  assert(cptr == sptr);
+
+  if (parc < 2 || *parv[1] == '\0')
+    return need_more_params(sptr, "UNZOMBIE");
+  
+  struct Client *victim = FindUser(parv[1]);
+  if (!victim) {
+    send_reply(sptr, ERR_NOSUCHNICK, parv[1]);
+    return 0;
+  }
+  
+  if(!IsNotConn(victim)) {
+    sendcmdto_one(cptr, CMD_NOTICE, &me, "%C :%C is not a zombie.", cptr, victim);
+    return 0;
+  }
+  
+  unzombie_client(&me, &me, sptr, victim);
+  return 0;
+}
 
 /** Handle an UNZOMBIE message from a server connection.
  *
@@ -74,7 +106,7 @@ int ms_unzombie(struct Client* cptr, struct Client* sptr, int parc,
   if (!IsNotConn(victim))
     return protocol_violation(cptr, "UNZOMBIE trying to attach to non-zombie %s",
 			      cli_name(victim));
-  assert(IsAccount(victim));
+  //assert(IsAccount(victim));
 
   unzombie_client(cptr, sptr, acptr, victim);
   return 0;

@@ -100,7 +100,7 @@ int ms_squit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return 0;
   }
   
-  return exit_client(cptr, acptr, sptr, comment);
+  return exit_client_msg(cptr, acptr, sptr, "%s", comment);
 }
 
 /*
@@ -156,5 +156,5 @@ int mo_squit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (IsLocOp(sptr) && !MyConnect(acptr))
     return send_reply(sptr, ERR_NOPRIVILEGES);
 
-  return exit_client(cptr, acptr, sptr, comment);
+  return exit_client_msg(cptr, acptr, sptr, "%s", comment);
 }

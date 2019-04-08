@@ -66,6 +66,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/** local zombie clients linked list entry */
+struct LocalZombieClient {
+  struct Client *lzc_client;
+  struct LocalZombieClient *lzc_prev, *lzc_next;
+};
+/** first local zombie client */
+struct LocalZombieClient* firstLocalZombieClient = NULL;
+
 /** Array of English month names (0 = January). */
 static char *months[] = {
   "January", "February", "March", "April",
@@ -319,34 +327,178 @@ static void exit_downlinks(struct Client *cptr, struct Client *sptr, char *comme
   }
 }
 
+static void insert_local_zombie_client(struct Client *cptr) {
+  struct LocalZombieClient *zombie = MyMalloc(sizeof(*zombie));
+  
+  zombie->lzc_client = cptr;
+  zombie->lzc_next = firstLocalZombieClient;
+  firstLocalZombieClient = zombie;
+}
+
+static void remove_local_zombie_client(struct Client *cptr) {
+  struct LocalZombieClient *zombie, *prev_zombie = NULL;
+  
+  for(zombie = firstLocalZombieClient; zombie; zombie = zombie->lzc_next) {
+    if(zombie->lzc_client == cptr)
+      break;
+    else
+      prev_zombie = zombie;
+  }
+  if(!zombie)
+    return;
+  
+  if(prev_zombie)
+    prev_zombie->lzc_next = zombie->lzc_next;
+  else
+    firstLocalZombieClient = zombie->lzc_next;
+  
+  MyFree(zombie);
+}
+
+struct Client *get_local_zombie_clients(void **nextptr) {
+  struct LocalZombieClient *zombie = *nextptr;
+  if(!zombie && !(zombie = firstLocalZombieClient))
+    return NULL;
+  
+  *nextptr = zombie->lzc_next;
+  return zombie->lzc_client;
+}
+
+/*
+static void zombie_downlink_clients(struct Client *cptr, struct Client *sptr, char *comment) {
+  struct Client *acptr, *zombie;
+  struct DLink *next;
+  struct DLink *lp;
+  struct Client **acptrp;
+  int i;
+
+  // Run over all its downlinks
+  for (lp = cli_serv(cptr)->down; lp; lp = next)
+  {
+    next = lp->next;
+    zombie_downlink_clients(lp->value.cptr, comment);
+  }
+  
+  // Create local zombie client for all clients with +Z of this server
+  acptrp = cli_serv(cptr)->client_list;
+  for (i = 0; i <= cli_serv(cptr)->nn_mask; ++acptrp, ++i) {
+    if ((acptr = *acptrp) && IsZombieUser(acptr)) {
+      zombie = make_client(NULL, STAT_USER);
+      cli_user(zombie) = make_user(zombie);
+      cli_user(zombie)->server = &me;
+      SetLocalNumNick(zombie);
+      
+      insert_local_zombie_client(zombie);
+      
+      zombie_client(&me, sptr, );
+    }
+  }
+}
+*/
+
+
 /**
  * Marks a local client as disconnected, and close its link if it is a local client.
  *
  * @param cptr server that notified us
- * @param killer origin of decision to zombie \a victim
- * @param victim zombied client
+ * @param sptr origin of decision to zombie \a victim
+ * @param zombie zombied client
  */
-void zombie_client(struct Client *cptr, struct Client *killer, struct Client *victim)
+int zombie_client(struct Client *cptr, struct Client *sptr, struct Client *zombie)
 {
   assert(IsServer(cptr) || IsMe(cptr));
-  assert(IsServer(killer) || IsMe(killer));
-  assert(IsUser(victim));
-
+  assert(IsServer(sptr) || IsMe(sptr));
+  assert(IsUser(zombie));
+  
+  /* cannot make zombie when not logged in */
+  //if(!IsAccount(zombie))
+  //  return 0;
+  
   /*
    * Stop a running /LIST clean
    */
-  if (MyUser(victim) && cli_listing(victim)) {
-    MyFree(cli_listing(victim));
-    cli_listing(victim) = NULL;
+  if (MyUser(zombie) && cli_listing(zombie)) {
+    MyFree(cli_listing(zombie));
+    cli_listing(zombie) = NULL;
   }
 
-  if (MyConnect(victim))
-    close_connection(victim);
+  if (MyConnect(zombie)) {
+    close_connection(zombie);
+    insert_local_zombie_client(zombie);
+    ClrFlag(zombie, FLAG_DEADSOCKET);
+  }
+  
   /* need this so that main loop doesn't exit the client */
-  ClrFlag(victim, FLAG_DEADSOCKET);
+  SetNotConn(zombie);
+  
+  sendcmdto_serv_butone(sptr, CMD_ZOMBIE, cptr, "%C", zombie);
+  return 1;
+}
 
-  SetNotConn(victim);
-  sendcmdto_serv_butone(killer, CMD_ZOMBIE, cptr, "%C", victim);
+/**
+ * Switches a client's connection over to a different, zombied client.
+ *
+ * @param client client to attach to zombied client
+ * @param zombie zombied client
+ */
+static void swap_zombie_client(struct Client *client, struct Client *zombie)
+{
+  assert(IsNotConn(zombie));
+  assert(!IsNotConn(client));
+  
+  int is_local_client = 0;
+  if(MyConnect(client)) {
+    assert(-1 < cli_fd(client));
+    LocalClientArray[cli_fd(client)] = zombie;
+    is_local_client = 1;
+  }
+  int is_local_zombie = 0;
+  if(MyConnect(zombie)) {
+    remove_local_zombie_client(zombie);
+    is_local_zombie = 1;
+  }
+  
+  struct Connection *zombie_connect = cli_connect(zombie);
+  struct Client *zombie_from = cli_from(zombie);
+  struct Client *zombie_server = cli_user(zombie)->server;
+  char zombie_yxx[4];
+  strcpy(zombie_yxx, cli_yxx(zombie));
+  int zombie_hopcount = cli_hopcount(zombie);
+  
+  /* remove numnicks from server userlist */
+  RemoveYXXClient(cli_user(client)->server, cli_yxx(client));
+  RemoveYXXClient(cli_user(zombie)->server, cli_yxx(zombie));
+  
+  /* copy client data to zombie */
+  cli_connect(zombie) = cli_connect(client);
+  cli_from(zombie) = is_local_client ? zombie : cli_from(client);
+  cli_user(zombie)->server = cli_user(client)->server;
+  strcpy(cli_yxx(zombie), cli_yxx(client));
+  cli_hopcount(zombie) = cli_hopcount(client);
+  
+  /* copy zombie data to client */
+  cli_connect(client) = zombie_connect;
+  cli_from(client) = is_local_zombie ? client : zombie_from;
+  cli_user(client)->server = zombie_server;
+  strcpy(cli_yxx(client), zombie_yxx);
+  cli_hopcount(client) = zombie_hopcount;
+  
+  /* register swapped numnicks to server userlist */
+  RegisterYXXClient(client);
+  RegisterYXXClient(zombie);
+  
+  /* copy client connection info to zombie */
+  cli_ip(zombie) = cli_ip(client);
+  strcpy(cli_username(zombie), cli_username(client));
+  strcpy(cli_user(zombie)->realhost, cli_user(client)->realhost);
+  
+  /* clear not conn flag from zombie */
+  ClearNotConn(zombie);
+  
+  /* set not conn flag for client */
+  SetNotConn(client);
+  if(MyConnect(client))
+    insert_local_zombie_client(client);
 }
 
 /**
@@ -355,53 +507,66 @@ void zombie_client(struct Client *cptr, struct Client *killer, struct Client *vi
  * @param cptr server that notified us
  * @param sptr origin server of unzombie operation
  * @param acptr client that is attaching to \a victim
- * @param victim zombied client that someone is attaching to
+ * @param zombie zombied client that someone is attaching to
  */
-void unzombie_client(struct Client *cptr, struct Client *sptr, struct Client *acptr, struct Client *victim)
+void unzombie_client(struct Client *cptr, struct Client *sptr, struct Client *acptr, struct Client *zombie)
 {
   assert(IsServer(cptr) || IsMe(cptr));
   assert(IsServer(sptr) || IsMe(sptr));
   assert(IsUser(acptr));
-  assert(IsNotConn(victim));
+  assert(IsNotConn(zombie));
 
-  if (MyConnect(acptr))
-    connection_switch_to_client(acptr, victim);
-
-  ClearOper(victim);
-  ClearNotConn(victim);
-
-  if (MyConnect(victim)) {
-    /* inform client about "new" modes */
-    struct Flags setflags = cli_flags(acptr);
-    struct Membership *chan;
-    sendcmdto_one(acptr, CMD_NICK, victim, "%C", victim);
-    send_umode(victim, victim, &setflags, ALL_UMODES);
-
-    /*
-     * mark current client as zombie on all channels so that it does not show
-     * up in the memberships we'll resend below
-     */
-    for (chan = cli_user(acptr)->channel; chan; chan = chan->next_channel) {
-      SetZombie(chan);
-    }
-
-    /* resend channel memberships */
-    for (chan = cli_user(victim)->channel; chan; chan = chan->next_channel) {
-      struct Channel *chptr = chan->channel;
-      /* pretty unlikely to happen but let's handle this anyway */
-      if (IsZombie(chan))
+  struct Membership *member;
+  int isLocal;
+  
+  if(MyConnect(acptr)) {
+    isLocal = 1;
+    
+    /* clear acptr session (send CMD_PART for all channnels to local client) */
+    for(member = cli_user(acptr)->channel; member; member = member->next_channel)
+      sendcmdto_one(acptr, CMD_PART, acptr, "%H :Attached to zombie user", member->channel);
+    
+    /* send new nick to acptr */
+    sendcmdto_one(acptr, CMD_NICK, acptr, "%C", zombie);
+    
+    /* exit acptr client on main loop */
+    SetFlag(acptr, FLAG_DEADSOCKET);
+  }
+  else
+    isLocal = 0;
+  
+  /* prevent quit message for acptr - it's blocked if zombie was on another server  */
+  SetFlag(acptr, FLAG_KILLED);
+  ircd_strncpy(cli_errinfo(acptr), "Switched to Zombie", ERRINFOLEN);
+  
+  /* forward unzombie message to other servers */
+  sendcmdto_serv_butone(sptr, CMD_UNZOMBIE, cptr, "%C %C", acptr, zombie);
+  
+  /* swap acptr <-> zobie connection - acptr is zombie and zombie is acptr now */
+  swap_zombie_client(acptr, zombie);
+  
+  if(isLocal) {
+    /* recover zombie user modes */
+    struct Flags setflags = cli_flags(zombie);
+    send_umode(zombie, zombie, &setflags, ALL_UMODES);
+    
+    /* recover zombie session (send CMD_JOIN for all channels to local client) */
+    for (member = cli_user(zombie)->channel; member; member = member->next_channel) {
+      struct Channel *chptr = member->channel;
+      if (IsZombie(member))
         continue;
-      sendcmdto_one(victim, CMD_JOIN, victim, ":%H", chptr);
+      sendcmdto_one(zombie, CMD_JOIN, zombie, ":%H", chptr);
       if (chptr->topic[0]) {
-        send_reply(victim, RPL_TOPIC, chptr->chname, chptr->topic);
-        send_reply(victim, RPL_TOPICWHOTIME, chptr->chname, chptr->topic_nick,
+        send_reply(zombie, RPL_TOPIC, chptr->chname, chptr->topic);
+        send_reply(zombie, RPL_TOPICWHOTIME, chptr->chname, chptr->topic_nick,
 		   chptr->topic_time);
       }
-      do_names(victim, chptr, NAMES_ALL|NAMES_EON); /* send /names list */
+      do_names(zombie, chptr, NAMES_ALL|NAMES_EON);
     }
   }
-
-  sendcmdto_serv_butone(sptr, CMD_UNZOMBIE, cptr, "%C %C", acptr, victim);
+  else {
+    exit_client(cptr, acptr, sptr);
+  }
 }
 
 /* exit_client, rewritten 25-9-94 by Run */
@@ -437,18 +602,18 @@ void unzombie_client(struct Client *cptr, struct Client *sptr, struct Client *ac
  * @param cptr Connection currently being handled by read_message.
  * @param victim Client being killed.
  * @param killer Client that made the decision to remove \a victim.
- * @param comment Reason for the exit.
  * @return CPTR_KILLED if cptr == bcptr, else 0.
  */
 int exit_client(struct Client *cptr,
     struct Client* victim,
-    struct Client* killer,
-    const char* comment)
+    struct Client* killer)
 {
   struct Client* acptr = 0;
   struct DLink *dlp;
   time_t on_for;
 
+  char *comment = (cli_errinfo(victim)[0] ? cli_errinfo(victim) : cli_info(victim));
+  
   char comment1[HOSTLEN + HOSTLEN + 2];
   assert(killer);
   if (MyConnect(victim))
@@ -472,32 +637,34 @@ int exit_client(struct Client *cptr,
     if (IsUser(victim) || IsUserPort(victim))
       auth_send_exit(victim);
 
-    if (IsUser(victim))
+    if (IsUser(victim)) {
       log_write(LS_USER, L_TRACE, 0, "%Tu %i %s@%s %s %s %s%s %s :%s",
-		cli_firsttime(victim), on_for,
-		cli_user(victim)->username, cli_sockhost(victim),
-                ircd_ntoa(&cli_ip(victim)),
-                cli_account(victim),
-                NumNick(victim), /* two %s's */
-                cli_name(victim), cli_info(victim));
+          cli_firsttime(victim), on_for,
+          cli_user(victim)->username, cli_sockhost(victim),
+          ircd_ntoa(&cli_ip(victim)),
+          cli_account(victim),
+          NumNick(victim), /* two %s's */
+          cli_name(victim), cli_info(victim));
+    }
+    
+    if(IsNotConn(victim))
+      remove_local_zombie_client(victim);
 
     if (victim != cli_from(killer)  /* The source knows already */
         && IsClient(victim))    /* Not a Ping struct or Log file */
     {
       if (IsServer(victim) || IsHandshake(victim))
-	sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
+        sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
       else if (!IsConnecting(victim)) {
         if (!IsDead(victim)) {
-	  if (IsServer(victim))
-	    sendcmdto_one(killer, CMD_ERROR, victim,
-			  ":Closing Link: %s by %s (%s)", cli_name(victim),
-			  cli_name(killer), comment);
-	  else
-	    sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)",
-			  cli_name(victim),
-                          cli_name(IsServer(killer) ? &his : killer),
-			  comment);
-	}
+          if (IsServer(victim))
+            sendcmdto_one(killer, CMD_ERROR, victim,
+              ":Closing Link: %s by %s (%s)", cli_name(victim),
+              cli_name(killer), comment);
+          else
+            sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)",
+              cli_name(victim), cli_name(IsServer(killer) ? &his : killer), comment);
+        }
       }
       if ((IsServer(victim) || IsHandshake(victim) || IsConnecting(victim)) &&
           (killer == &me || (IsServer(killer) &&
@@ -511,9 +678,9 @@ int exit_client(struct Client *cptr,
         if (cli_serv(victim)->user && *(cli_serv(victim))->by &&
             (acptr = findNUser(cli_serv(victim)->by))) {
           if (cli_user(acptr) == cli_serv(victim)->user) {
-	    sendcmdto_one(&me, CMD_NOTICE, acptr,
-			  "%C :Link with %s canceled: %s", acptr,
-			  cli_name(victim), comment);
+            sendcmdto_one(&me, CMD_NOTICE, acptr,
+              "%C :Link with %s canceled: %s", acptr,
+              cli_name(victim), comment);
           }
           else {
             /*
@@ -524,8 +691,8 @@ int exit_client(struct Client *cptr,
           }
         }
         if (killer == &me)
-	  sendto_opmask_butone(acptr, SNO_OLDSNO, "Link with %s canceled: %s",
-			       cli_name(victim), comment);
+          sendto_opmask_butone(acptr, SNO_OLDSNO, "Link with %s canceled: %s",
+            cli_name(victim), comment);
       }
     }
     /*
@@ -558,6 +725,13 @@ int exit_client(struct Client *cptr,
 			   get_client_name(killer, HIDE_IP));
     sendto_opmask_butone(0, SNO_NETWORK, "Net break: %C %C (%s)",
 			 cli_serv(victim)->up, victim, comment);
+    
+    /*
+    if(MyUser(killer) || killer == &me) {
+      // we have to take care of all zombies on the killed side
+      zombie_downlink_clients(victim, comment1);
+    }
+    */
   }
 
   /*
@@ -600,9 +774,8 @@ int exit_client(struct Client *cptr,
 int vexit_client_msg(struct Client *cptr, struct Client *bcptr, struct Client *sptr,
     const char *pattern, va_list vl)
 {
-  char msgbuf[1024];
-  ircd_vsnprintf(0, msgbuf, sizeof(msgbuf), pattern, vl);
-  return exit_client(cptr, bcptr, sptr, msgbuf);
+  ircd_vsnprintf(0, cli_errinfo(bcptr), ERRINFOLEN, pattern, vl);
+  return exit_client(cptr, bcptr, sptr);
 }
 
 /**
@@ -618,13 +791,12 @@ int exit_client_msg(struct Client *cptr, struct Client *bcptr,
     struct Client *sptr, const char *pattern, ...)
 {
   va_list vl;
-  char msgbuf[1024];
 
   va_start(vl, pattern);
-  ircd_vsnprintf(0, msgbuf, sizeof(msgbuf), pattern, vl);
+  ircd_vsnprintf(0, cli_errinfo(bcptr), ERRINFOLEN, pattern, vl);
   va_end(vl);
 
-  return exit_client(cptr, bcptr, sptr, msgbuf);
+  return exit_client(cptr, bcptr, sptr);
 }
 
 /** Initialize global server statistics. */

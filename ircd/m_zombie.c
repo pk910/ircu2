@@ -65,9 +65,9 @@ int ms_zombie(struct Client* cptr, struct Client* sptr, int parc,
   if (!(acptr = findNUser(parv[1])))
     return 0; /* Ignore for a user that QUIT; probably crossed (however unlikely) */
 
-  if (!IsAccount(acptr))
-    return protocol_violation(cptr, "ZOMBIE for user without account (%s)",
-			      cli_name(acptr));
+  //if (!IsAccount(acptr))
+  //  return protocol_violation(cptr, "ZOMBIE for user without account (%s)",
+	//		      cli_name(acptr));
 
   zombie_client(cptr, sptr, acptr);
   return 0;

@@ -131,6 +131,7 @@ extern int m_topic(struct Client*, struct Client*, int, char*[]);
 extern int m_trace(struct Client*, struct Client*, int, char*[]);
 extern int m_unregistered(struct Client*, struct Client*, int, char*[]);
 extern int m_unsupported(struct Client*, struct Client*, int, char*[]);
+extern int m_unzombie(struct Client*, struct Client*, int, char*[]);
 extern int m_user(struct Client*, struct Client*, int, char*[]);
 extern int m_userhost(struct Client*, struct Client*, int, char*[]);
 extern int m_userip(struct Client*, struct Client*, int, char*[]);

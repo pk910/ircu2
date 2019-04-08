@@ -405,7 +405,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
                     sptr, cli_name(&me), cli_name(user->server), cli_name(cli_from(acptr)),
                     cli_sockhost(cli_from(acptr)));
       SetFlag(sptr, FLAG_KILLED);
-      return exit_client(cptr, sptr, &me, "NICK server wrong direction");
+      return exit_client_msg(cptr, sptr, &me, "NICK server wrong direction");
     }
     else if (HasFlag(acptr, FLAG_TS8))
       SetFlag(sptr, FLAG_TS8);
@@ -428,7 +428,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
        */
       sendcmdto_one(&me, CMD_KILL, sptr, "%C :%s (Too many connections from your host -- Ghost)",
                     sptr, cli_name(&me));
-      return exit_client(cptr, sptr, &me,"Too many connections from your host -- throttled");
+      return exit_client_msg(cptr, sptr, &me,"Too many connections from your host -- throttled");
     }
     SetUser(sptr);
   }
@@ -500,7 +500,7 @@ static const struct UserMode {
   { FLAG_DEBUG,       'g' },
   { FLAG_ACCOUNT,     'r' },
   { FLAG_HIDDENHOST,  'x' },
-  { FLAG_NOTCONN,     'Z' }
+  { FLAG_ZOMBIE,      'Z' }
 };
 
 /** Length of #userModeList. */
@@ -1080,9 +1080,9 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
 	break;
       case 'Z':
 	if (what == MODE_ADD)
-	  SetNotConn(sptr);
+	  SetZombieUser(sptr);
 	else
-	  ClearNotConn(sptr);
+	  ClearZombieUser(sptr);
 	break;
       default:
         send_reply(sptr, ERR_UMODEUNKNOWNFLAG, *m);
@@ -1102,8 +1102,6 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       ClearLocOp(sptr);
     if (!FlagHas(&setflags, FLAG_ACCOUNT) && IsAccount(sptr))
       ClrFlag(sptr, FLAG_ACCOUNT);
-    if (!FlagHas(&setflags, FLAG_NOTCONN) && IsNotConn(sptr))
-      ClrFlag(sptr, FLAG_NOTCONN);
     /*
      * new umode; servers can set it, local users cannot;
      * prevents users from /kick'ing or /mode -o'ing

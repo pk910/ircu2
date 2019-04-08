@@ -96,7 +96,7 @@ int server_dopacket(struct Client* cptr, const char* buffer, int length)
        *  Socket is dead so exit
        */
       if (IsDead(cptr))
-        return exit_client(cptr, cptr, &me, cli_info(cptr));
+        return exit_client(cptr, cptr, &me);
       endp = client_buffer;
     }
     else if (endp < client_buffer + BUFSIZE)
@@ -149,7 +149,7 @@ int connect_dopacket(struct Client *cptr, const char *buffer, int length)
         return CPTR_KILLED;
       /* Socket is dead so exit */
       if (IsDead(cptr))
-        return exit_client(cptr, cptr, &me, cli_info(cptr));
+        return exit_client(cptr, cptr, &me);
       else if (IsServer(cptr))
       {
         cli_count(cptr) = 0;
@@ -180,7 +180,7 @@ int client_dopacket(struct Client *cptr, unsigned int length)
   if (CPTR_KILLED == parse_client(cptr, cli_buffer(cptr), cli_buffer(cptr) + length))
     return CPTR_KILLED;
   else if (IsDead(cptr))
-    return exit_client(cptr, cptr, &me, cli_info(cptr));
+    return exit_client(cptr, cptr, &me);
 
   return 1;
 }

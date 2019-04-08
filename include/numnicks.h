@@ -70,6 +70,7 @@ struct Client;
 extern void SetRemoteNumNick(struct Client* cptr, const char* yxx);
 extern int  SetLocalNumNick(struct Client* cptr);
 extern void RemoveYXXClient(struct Client* server, const char* yxx);
+extern void RegisterYXXClient(struct Client* acptr);
 extern void SetServerYXX(struct Client* cptr, 
                          struct Client* server, const char* yxx);
 extern void ClearServerYXX(const struct Client* server);
