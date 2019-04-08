@@ -508,7 +508,7 @@ static const struct UserMode {
   { FLAG_DEBUG,       'g' },
   { FLAG_ACCOUNT,     'r' },
   { FLAG_HIDDENHOST,  'x' },
-  { FLAG_SSLCONN,     'S' }
+  { FLAG_SSLCONN,     'S' },
   { FLAG_ZOMBIE,      'Z' }
 };
 
