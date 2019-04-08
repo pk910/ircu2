@@ -91,8 +91,13 @@ struct ServerStatistics {
 
 extern int check_registered(struct Client *sptr);
 extern int check_registered_user(struct Client *sptr);
+extern struct Client *get_local_zombie_clients(void **nextptr);
+extern int zombie_client(struct Client *cptr, struct Client *killer,
+			 struct Client *victim);
+extern void unzombie_client(struct Client *cptr, struct Client *sptr,
+			    struct Client *acptr, struct Client *victim);
 extern int exit_client(struct Client *cptr, struct Client *bcptr,
-    struct Client *sptr, const char *comment);
+    struct Client *sptr);
 extern char *myctime(time_t value);
 extern int exit_client_msg(struct Client *cptr, struct Client *bcptr,
                            struct Client *sptr, const char *pattern, ...);

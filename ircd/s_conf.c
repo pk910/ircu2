@@ -1043,11 +1043,11 @@ int rehash(struct Client *cptr, int sig)
                              "K-line active for %s%s",
                              IsUnknown(acptr) ? "Unregistered Client ":"",
                              get_client_name(acptr, SHOW_IP));
-        if (exit_client(cptr, acptr, &me, found_g == -2 ? "G-lined" :
+        if (exit_client_msg(cptr, acptr, &me, found_g == -2 ? "G-lined" :
             "K-lined") == CPTR_KILLED)
           ret = CPTR_KILLED;
       } else if ((wline = cli_wline(acptr)) && wline->stale) {
-        if (exit_client(cptr, acptr, &me, "WebIRC authorization removed")
+        if (exit_client_msg(cptr, acptr, &me, "WebIRC authorization removed")
             == CPTR_KILLED)
           ret = CPTR_KILLED;
       }

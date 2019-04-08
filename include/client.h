@@ -155,6 +155,8 @@ enum Flag
     FLAG_BURST,                     /**< Server is receiving a net.burst */
     FLAG_BURST_ACK,                 /**< Server is waiting for eob ack */
     FLAG_IPCHECK,                   /**< Added or updated IPregistry data */
+    FLAG_NOTCONN,                   /**< nobody is connected to this client */
+    
     FLAG_LOCOP,                     /**< Local operator -- SRB */
     FLAG_SERVNOTICE,                /**< server notices such as kill */
     FLAG_OPER,                      /**< Operator */
@@ -167,6 +169,8 @@ enum Flag
     FLAG_ACCOUNT,                   /**< account name has been set */
     FLAG_HIDDENHOST,                /**< user's host is hidden */
     FLAG_SSLCONN,                   /**< SSL Connection */
+    FLAG_ZOMBIE,                    /**< keep user alive on client connection close */
+    
     FLAG_LAST_FLAG,                 /**< number of flags */
     FLAG_LOCAL_UMODES = FLAG_LOCOP, /**< First local mode flag */
     FLAG_GLOBAL_UMODES = FLAG_OPER  /**< First global mode flag */
@@ -261,6 +265,7 @@ struct Client {
   char cli_name[HOSTLEN + 1];     /**< Unique name of the client, nick or host */
   char cli_username[USERLEN + 1]; /**< Username determined by ident lookup */
   char cli_info[REALLEN + 1];     /**< Free form additional client information */
+  char cli_errinfo[ERRINFOLEN+1]; /**< error information (quit message) for client */
 };
 
 /** Magic constant to identify valid Client structures. */
@@ -279,7 +284,7 @@ struct Client {
 /** Get connection associated with client. */
 #define cli_connect(cli)	((cli)->cli_connect)
 /** Get local client that links us to \a cli. */
-#define cli_from(cli)		con_client(cli_connect(cli))
+#define cli_from(cli)		(con_client(cli_connect(cli)))
 /** Get User structure for client, if client is a user. */
 #define cli_user(cli)		((cli)->cli_user)
 /** Get Server structure for client, if client is a server. */
@@ -320,6 +325,8 @@ struct Client {
 #define cli_username(cli)	((cli)->cli_username)
 /** Get client realname (information field). */
 #define cli_info(cli)		((cli)->cli_info)
+/** Get client error info (quit message). */
+#define cli_errinfo(cli)		((cli)->cli_errinfo)
 /** Get client account string. */
 #define cli_account(cli)	(cli_user(cli) ? cli_user(cli)->account : "0")
 
@@ -596,6 +603,10 @@ struct Client {
 #define IsHiddenHost(x)         HasFlag(x, FLAG_HIDDENHOST)
 /** Return non-zero if the client has set mode +S (SSL Connection). */
 #define IsSSLConn(x)            HasFlag(x, FLAG_SSLCONN)
+/** Return non-zero if the client has set mode +Z (Zombie) */
+#define IsZombieUser(x)         HasFlag(x, FLAG_ZOMBIE)
+/** Return non-zero if nobody is connected to this client structure */
+#define IsNotConn(x)            HasFlag(x, FLAG_NOTCONN)
 /** Return non-zero if the client has an active PING request. */
 #define IsPingSent(x)           HasFlag(x, FLAG_PINGSENT)
 
@@ -644,7 +655,10 @@ struct Client {
 #define SetHiddenHost(x)        SetFlag(x, FLAG_HIDDENHOST)
 /** Mark a client as having mode +S (SSL Connection). */
 #define SetSSLConn(x)           SetFlag(x, FLAG_SSLCONN)
-
+/** Mark a client as not having anyone connected to it */
+#define SetNotConn(x)           SetFlag(x, FLAG_NOTCONN)
+/** Return non-zero if the client has set mode +Z (Zombie) */
+#define SetZombieUser(x)        SetFlag(x, FLAG_ZOMBIE)
 /** Mark a client as having a pending PING. */
 #define SetPingSent(x)          SetFlag(x, FLAG_PINGSENT)
 
@@ -680,6 +694,10 @@ struct Client {
 #define ClearHiddenHost(x)      ClrFlag(x, FLAG_HIDDENHOST)
 /** Remove mode +S (SSL Connection) from the client. */
 #define ClearSSLConn(x)         ClrFlag(x, FLAG_SSLCONN)
+/** Mark client as having someone connected to it */
+#define ClearNotConn(x)         ClrFlag(x, FLAG_NOTCONN)
+/** Return non-zero if the client has set mode +Z (Zombie) */
+#define ClearZombieUser(x)      ClrFlag(x, FLAG_ZOMBIE)
 /** Clear the client's pending PING flag. */
 #define ClearPingSent(x)        ClrFlag(x, FLAG_PINGSENT)
 /** Clear the client's HUB flag. */

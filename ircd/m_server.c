@@ -205,7 +205,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
      */
     if (IsConnecting(acptr))
     {
-      if (active_lh_line == ALLOWED && exit_client(cptr, acptr, &me,
+      if (active_lh_line == ALLOWED && exit_client_msg(cptr, acptr, &me,
           "Just connected via another link") == CPTR_KILLED)
         return CPTR_KILLED;
       /*
@@ -231,7 +231,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
         find_conf_byhost(cli_confs(cptr), cli_name(acptr), CONF_UWORLD)))
     {
       if (!IsServer(sptr))
-        return exit_client(cptr, sptr, &me, cli_info(acptr));
+        return exit_client_msg(cptr, sptr, &me, "%s", cli_info(acptr));
       sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
 			    ":Received :%s SERVER %s from %s !?!",
                             NumServ(cptr), host, cli_name(cptr));
@@ -366,7 +366,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
         if (CurrentTime - cli_serv(cptr)->ghost < 20)
         {
           killedptrfrom = cli_from(acptr);
-          if (exit_client(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
+          if (exit_client_msg(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
             return CPTR_KILLED;
         }
         else if (exit_client_msg(cptr, c2ptr, &me,
@@ -403,7 +403,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
          */
         if (ghost)
           *ghost = CurrentTime;            /* Mark that it caused a ghost */
-        if (exit_client(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
+        if (exit_client_msg(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
           return CPTR_KILLED;
         break;
       }
@@ -429,7 +429,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
     else /* I_AM_NOT_HUB */
     {
       ++ServerStats->is_not_hub;
-      return exit_client(cptr, LHcptr, &me, "I'm a leaf, define the HUB feature");
+      return exit_client_msg(cptr, LHcptr, &me, "I'm a leaf, define the HUB feature");
     }
   }
 
@@ -533,7 +533,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (parc < 8)
   {
     need_more_params(sptr, "SERVER");
-    return exit_client(cptr, cptr, &me, "Need more parameters");
+    return exit_client_msg(cptr, cptr, &me, "Need more parameters");
   }
   host = clean_servername(parv[1]);
   if (!host)
@@ -550,7 +550,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (0 != conf_eval_crule(host, CRULE_ALL)) {
     ++ServerStats->is_crule_fail;
     sendto_opmask_butone(0, SNO_OLDSNO, "Refused connection from %s.", cli_name(cptr));
-    return exit_client(cptr, cptr, &me, "Disallowed by connection rule");
+    return exit_client_msg(cptr, cptr, &me, "Disallowed by connection rule");
   }
 
   log_write(LS_NETWORK, L_NOTICE, LOG_NOSNOTICE, "SERVER: %s %s[%s]", host,
@@ -592,7 +592,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     log_write(LS_NETWORK, L_NOTICE, LOG_NOSNOTICE, "Received unauthorized "
               "connection from %C [%s]", cptr,
               ircd_ntoa(&cli_ip(cptr)));
-    return exit_client(cptr, cptr, &me, "No Connect block");
+    return exit_client_msg(cptr, cptr, &me, "No Connect block");
   }
 
   host = cli_name(cptr);

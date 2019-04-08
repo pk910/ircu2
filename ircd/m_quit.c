@@ -90,6 +90,8 @@
 #include "s_misc.h"
 #include "ircd_reply.h"
 
+#include "hash.h"
+
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <string.h>
 
@@ -105,17 +107,29 @@ int m_quit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   assert(0 != sptr);
   assert(cptr == sptr);
 
+  if (!strcmp(parv[parc - 1], "ZOMBIE")) {
+    zombie_client(&me, &me, sptr);
+    return 0;
+  }
+  if (!strcmp(parv[parc - 1], "UNZOMBIE")) {
+    struct Client *victim = FindUser("jast");
+    if (victim) {
+      unzombie_client(&me, &me, sptr, victim);
+      return 0;
+    }
+  }
+
   if (cli_user(sptr)) {
     struct Membership* chan;
     for (chan = cli_user(sptr)->channel; chan; chan = chan->next_channel) {
         if (!IsZombie(chan) && !IsDelayedJoin(chan) && !member_can_send_to_channel(chan, 0))
-        return exit_client(cptr, sptr, sptr, "Signed off");
+        return exit_client_msg(cptr, sptr, sptr, "Signed off");
     }
   }
   if (parc > 1 && !BadPtr(parv[parc - 1]))
     return exit_client_msg(cptr, sptr, sptr, "Quit: %s", parv[parc - 1]);
   else
-    return exit_client(cptr, sptr, sptr, "Quit");
+    return exit_client_msg(cptr, sptr, sptr, "Quit");
 }
 
 
@@ -136,5 +150,5 @@ int ms_quit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /*
    * ignore quit from servers
    */
-  return exit_client(cptr, sptr, sptr, parv[parc - 1]);
+  return exit_client_msg(cptr, sptr, sptr, "%s", parv[parc - 1]);
 }

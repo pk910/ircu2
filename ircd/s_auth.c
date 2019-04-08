@@ -276,7 +276,7 @@ static int auth_set_username(struct AuthRequest *auth)
   /* If username is empty or just ~, reject. */
   if ((user->username[0] == '\0')
       || ((user->username[0] == '~') && (user->username[1] == '\0')))
-    return exit_client(sptr, sptr, &me, "USER: Bogus userid.");
+    return exit_client_msg(sptr, sptr, &me, "USER: Bogus userid.");
 
   if (!FlagHas(&auth->flags, AR_IAUTH_FUSERNAME))
   {
@@ -354,7 +354,7 @@ badid:
   send_reply(sptr, SND_EXPLICIT | ERR_INVALIDUSERNAME,
              ":If your mail address were foo@bar.com, your username "
              "would be foo.");
-  return exit_client(sptr, sptr, &me, "USER: Bad username");
+  return exit_client_msg(sptr, sptr, &me, "USER: Bad username");
 }
 
 /** Notifies IAuth of a status change for the client.
@@ -464,7 +464,7 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
     if (killreason)
     {
       ++ServerStats->is_k_lined;
-      return exit_client(sptr, sptr, &me,
+      return exit_client_msg(sptr, sptr, &me,
                          (killreason == -1 ? "K-lined" : "G-lined"));
     }
 
@@ -548,7 +548,7 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
       {
         ++ServerStats->is_bad_password;
         send_reply(cptr, ERR_PASSWDMISMATCH);
-        res = exit_client(cptr, cptr, &me, "Bad Password");
+        res = exit_client_msg(cptr, cptr, &me, "Bad Password");
       }
     }
 
@@ -624,7 +624,7 @@ static int preregister_user(struct Client *cptr)
     sendto_opmask_butone(0, SNO_UNAUTH, "Unauthorized connection from %s.",
                          get_client_name(cptr, HIDE_IP));
     ++ServerStats->is_no_client;
-    return exit_client(cptr, cptr, &me,
+    return exit_client_msg(cptr, cptr, &me,
                        "No Authorization - use another server");
   case ACR_TOO_MANY_IN_CLASS:
     sendto_opmask_butone_ratelimited(0, SNO_TOOMANY, &last_too_many1,
@@ -632,7 +632,7 @@ static int preregister_user(struct Client *cptr)
                                      get_client_class(cptr),
                                      get_client_name(cptr, SHOW_IP));
     ++ServerStats->is_class_full;
-    return exit_client(cptr, cptr, &me,
+    return exit_client_msg(cptr, cptr, &me,
                        "Sorry, your connection class is full - try "
                        "again later or try another server");
   case ACR_TOO_MANY_FROM_IP:
@@ -640,14 +640,14 @@ static int preregister_user(struct Client *cptr)
                                      "Too many connections from same IP for %s.",
                                      get_client_name(cptr, SHOW_IP));
     ++ServerStats->is_ip_full;
-    return exit_client(cptr, cptr, &me,
+    return exit_client_msg(cptr, cptr, &me,
                        "Too many connections from your host");
   case ACR_ALREADY_AUTHORIZED:
     /* Can this ever happen? */
   case ACR_BAD_SOCKET:
     ++ServerStats->is_bad_socket;
     IPcheck_connect_fail(cptr, 0);
-    return exit_client(cptr, cptr, &me, "Unknown error -- Try again");
+    return exit_client_msg(cptr, cptr, &me, "Unknown error -- Try again");
   }
   return 0;
 }
@@ -995,7 +995,7 @@ static void auth_dns_callback(void* vptr, const struct irc_in_addr *addr, const 
                 ircd_ntoa(addr));
     }
     if (feature_bool(FEAT_KILL_IPMISMATCH)) {
-      exit_client(auth->client, auth->client, &me, "IP mismatch");
+      exit_client_msg(auth->client, auth->client, &me, "IP mismatch");
       return;
     }
   } else if (!auth_verify_hostname(h_name, HOSTLEN)) {
@@ -1138,7 +1138,7 @@ void start_auth(struct Client* client)
     ++ServerStats->is_abad;
     if (IsUserPort(auth->client))
       sendheader(auth->client, REPORT_FAIL_ID);
-    exit_client(auth->client, auth->client, &me, "Socket local/peer lookup failed");
+    exit_client_msg(auth->client, auth->client, &me, "Socket local/peer lookup failed");
     return;
   }
   auth->port = remote.port;
@@ -1314,7 +1314,7 @@ int auth_spoof_user(struct AuthRequest *auth, const char *username, const char *
     return 2;
   if (!IPcheck_local_connect(&cli_ip(sptr), &next_target)) {
     ++ServerStats->is_throttled;
-    return exit_client(sptr, sptr, &me, "Your host is trying to (re)connect too fast -- throttled");
+    return exit_client_msg(sptr, sptr, &me, "Your host is trying to (re)connect too fast -- throttled");
   }
   SetIPChecked(sptr);
 
@@ -2131,7 +2131,7 @@ static int iauth_cmd_kill(struct IAuth *iauth, struct Client *cli,
     FlagClr(&cli_auth(cli)->flags, AR_IAUTH_PENDING);
   if (EmptyString(params[0]))
     params[0] = "Access denied";
-  exit_client(cli, cli, &me, params[0]);
+  exit_client_msg(cli, cli, &me, "%s", params[0]);
   return 0;
 }
 

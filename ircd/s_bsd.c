@@ -481,7 +481,7 @@ int net_close_unregistered_connections(struct Client* source)
   for (i = HighestFd; i > 0; --i) {
     if ((cptr = LocalClientArray[i]) && !IsRegistered(cptr)) {
       send_reply(source, RPL_CLOSING, get_client_name(source, HIDE_IP));
-      exit_client(source, cptr, &me, "Oper Closing");
+      exit_client_msg(source, cptr, &me, "Oper Closing");
       ++count;
     }
   }
@@ -683,10 +683,10 @@ static int read_packet(struct Client *cptr, int socket_ready)
      * turn comes around.
      */
     if (length > 0 && dbuf_put(&(cli_recvQ(cptr)), readbuf, length) == 0)
-      return exit_client(cptr, cptr, &me, "dbuf_put fail");
+      return exit_client_msg(cptr, cptr, &me, "dbuf_put fail");
 
     if (DBufLength(&(cli_recvQ(cptr))) > feature_int(FEAT_CLIENT_FLOOD))
-      return exit_client(cptr, cptr, &me, "Excess Flood");
+      return exit_client_msg(cptr, cptr, &me, "Excess Flood");
 
     while (DBufLength(&(cli_recvQ(cptr))) && !NoNewLine(cptr) && 
            (IsTrusted(cptr) || cli_since(cptr) - CurrentTime < 10))
@@ -988,7 +988,7 @@ static void client_sock_callback(struct Event* ev)
     if (!IsDead(cptr)) {
       Debug((DEBUG_DEBUG, "Reading data from %C", cptr));
       if (read_packet(cptr, 1) == 0) /* error while reading packet */
-	fallback = "EOF from client";
+        fallback = "EOF from client";
     }
     break;
 
@@ -997,13 +997,16 @@ static void client_sock_callback(struct Event* ev)
     break;
   }
 
-  assert(0 == cptr || 0 == cli_connect(cptr) || con == cli_connect(cptr));
-
   if (fallback) {
     const char* msg = (cli_error(cptr)) ? strerror(cli_error(cptr)) : fallback;
     if (!msg)
       msg = "Unknown error";
-    exit_client_msg(cptr, cptr, &me, fmt, msg);
+    
+    if(IsUser(cptr) && IsZombieUser(cptr) && zombie_client(&me, &me, cptr)) {
+      ircd_strncpy(cli_errinfo(cptr), msg, ERRINFOLEN);
+    }
+    else
+      exit_client_msg(cptr, cptr, &me, fmt, msg);
   }
 }
 

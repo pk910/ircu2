@@ -413,7 +413,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
                     sptr, cli_name(&me), cli_name(user->server), cli_name(cli_from(acptr)),
                     cli_sockhost(cli_from(acptr)));
       SetFlag(sptr, FLAG_KILLED);
-      return exit_client(cptr, sptr, &me, "NICK server wrong direction");
+      return exit_client_msg(cptr, sptr, &me, "NICK server wrong direction");
     }
     else if (HasFlag(acptr, FLAG_TS8))
       SetFlag(sptr, FLAG_TS8);
@@ -436,7 +436,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
        */
       sendcmdto_one(&me, CMD_KILL, sptr, "%C :%s (Too many connections from your host -- Ghost)",
                     sptr, cli_name(&me));
-      return exit_client(cptr, sptr, &me,"Too many connections from your host -- throttled");
+      return exit_client_msg(cptr, sptr, &me,"Too many connections from your host -- throttled");
     }
     SetUser(sptr);
   }
@@ -509,6 +509,7 @@ static const struct UserMode {
   { FLAG_ACCOUNT,     'r' },
   { FLAG_HIDDENHOST,  'x' },
   { FLAG_SSLCONN,     'S' }
+  { FLAG_ZOMBIE,      'Z' }
 };
 
 /** Length of #userModeList. */
@@ -1091,6 +1092,12 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
 	  SetAccount(sptr);
 	}
 	/* There is no -r */
+	break;
+      case 'Z':
+	if (what == MODE_ADD)
+	  SetZombieUser(sptr);
+	else
+	  ClearZombieUser(sptr);
 	break;
       default:
         send_reply(sptr, ERR_UMODEUNKNOWNFLAG, *m);

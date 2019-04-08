@@ -346,7 +346,7 @@ void SetRemoteNumNick(struct Client* acptr, const char *yxx)
      * this exits the old client in the array, not the client
      * that is being set
      */
-    exit_client(cli_from(acptr), *acptrp, server, "Numeric nick collision (Ghost)");
+    //exit_client_msg(cli_from(acptr), *acptrp, server, "Numeric nick collision (Ghost)");
   }
   *acptrp = acptr;
 }
@@ -380,6 +380,31 @@ int SetLocalNumNick(struct Client *cptr)
   if (++last_nn == NN_MAX_CLIENT)
     last_nn = 0;
   return 1;
+}
+
+/** Register numeric of new client.
+ * See @ref numnicks for more details.
+ * Add it to the appropriate client_list.
+ * @param[in] acptr %User being registered.
+ * @param[in] yxx User's numnick.
+ */
+void RegisterYXXClient(struct Client* acptr)
+{
+  struct Client** acptrp;
+  struct Client*  server = cli_user(acptr)->server;
+
+  Debug((DEBUG_DEBUG, "SetYXXClient: %s(%d)", cli_yxx(acptr),
+         base64toint(cli_yxx(acptr)) & cli_serv(server)->nn_mask));
+
+  acptrp = &(cli_serv(server))->client_list[base64toint(cli_yxx(acptr)) & cli_serv(server)->nn_mask];
+  if (*acptrp) {
+    /*
+     * this exits the old client in the array, not the client
+     * that is being set
+     */
+    //exit_client_msg(cli_from(acptr), *acptrp, server, "Numeric nick collision (Ghost)");
+  }
+  *acptrp = acptr;
 }
 
 /** Mark servers whose name matches the given (compiled) mask by
