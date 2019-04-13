@@ -49,8 +49,7 @@ extern time_t         CurrentTime;
 extern struct Client* GlobalClientList;
 extern time_t         TSoffset;
 extern char*          configfile;
-extern int            debuglevel;
-extern char*          debugmode;
+extern unsigned int   debuglevel;
 extern int	      running;
 
 #endif /* INCLUDED_ircd_h */
