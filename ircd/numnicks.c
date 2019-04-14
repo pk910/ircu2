@@ -60,18 +60,6 @@
  * just-disconnected-client aren't confused with just-connected ones.
  */
 
-
-/* These must be the same on ALL servers ! Do not change ! */
-
-/** Number of bits encoded in one numnick character. */
-#define NUMNICKLOG 6
-/** Bitmask to select value of next numnick character. */
-#define NUMNICKMASK 63          /* (NUMNICKBASE-1) */
-/** Number of servers representable in a numnick. */
-#define NN_MAX_SERVER 4096      /* (NUMNICKBASE * NUMNICKBASE) */
-/** Number of clients representable in a numnick. */
-#define NN_MAX_CLIENT 262144    /* NUMNICKBASE ^ 3 */
-
 /*
  * The internal counter for the 'XX' of local clients
  */

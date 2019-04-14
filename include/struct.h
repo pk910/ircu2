@@ -37,12 +37,16 @@ struct Client;
 struct User;
 struct Membership;
 struct SLink;
+struct RouteLinkInfo;
 
 /** Describes a server on the network. */
 struct Server {
   struct Client*  up;           /**< Server one closer to me */
   struct DLink*   down;         /**< List with downlink servers */
   struct DLink*   updown;       /**< own Dlink in up->serv->down struct */
+  struct RouteLinkInfo* routes; /**< List with all links to this server (sorted by link cost) */
+  struct RouteInfo* fwd_route;  /**< Broadcast forward route from this server */
+  struct RouteInfo* own_route;  /**< Broadcast send route to this server */
   struct Client** client_list;  /**< List with client pointers on this server */
   struct User*    user;         /**< who activated this connection */
   time_t          timestamp;    /**< Remotely determined connect try time */
@@ -51,6 +55,9 @@ struct Server {
   int             lag;          /**< Approximation of the amount of lag to this server */
   unsigned int    clients;      /**< Number of clients on the server */
   unsigned short  prot;         /**< Major protocol */
+  unsigned int    send_ucmidx;  /**< last unicast message index myself used to send to this server */
+  unsigned int    recv_ucmidx;  /**< last unicast message index received by this server */
+  unsigned int    recv_bcmidx;  /**< last broadcast message index received by this server */
   unsigned int    nn_mask;      /**< Number of clients supported by server, minus 1 */
   char          nn_capacity[4]; /**< Numeric representation of server capacity */
 

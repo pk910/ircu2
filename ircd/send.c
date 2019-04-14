@@ -41,6 +41,7 @@
 #include "s_debug.h"
 #include "s_misc.h"
 #include "s_user.h"
+#include "s_routing.h"
 #include "struct.h"
 #include "sys.h"
 
@@ -235,9 +236,10 @@ void send_buffer(struct Client* to, struct MsgBuf* buf, int prio)
     dead_link(to, "Max sendQ exceeded");
     return;
   }
-
+  
   Debug((DEBUG_SEND, "Sending [%p] to %s", buf, cli_name(to)));
-
+  Debug((DEBUG_PROTO, "SEND [%s:%s] %.*s", GetClientTypeChar(to), to->cli_yxx, buf->length-2, buf->msg));
+  
   msgq_add(&(cli_sendQ(to)), buf, prio);
   client_add_sendq(cli_connect(to), &send_queues);
   update_write(to);
@@ -398,6 +400,10 @@ void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,
       continue;
     if ((forbid < FLAG_LAST_FLAG) && HasFlag(lp->value.cptr, forbid))
       continue;
+    if(!check_forward_to_server(from, lp->value.cptr))
+      continue;
+    
+    ensure_route_announced(lp->value.cptr);
     send_buffer(lp->value.cptr, mb, 0);
   }
 
@@ -431,6 +437,59 @@ void sendcmdto_serv_butone(struct Client *from, const char *cmd,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
+    if(!check_forward_to_server(from, lp->value.cptr))
+      continue;
+    
+    ensure_route_announced(lp->value.cptr);
+    send_buffer(lp->value.cptr, mb, 0);
+  }
+
+  msgq_clean(mb);
+}
+
+
+/**
+ * Send a (prefixed) command to all neighbours but one.
+ * @param[in] from Client sending the command.
+ * @param[in] cmd Long name of command (ignored).
+ * @param[in] tok Short name of command.
+ * @param[in] one Client direction to skip (or NULL).
+ * @param[in] pattern Format string for command arguments.
+ */
+void sendcmdto_neighbours_butone(struct Client *from, const char *cmd,
+			   const char *tok, struct Client *one,
+			   const char *pattern, ...)
+{
+  struct VarData vd;
+  
+  vd.vd_format = pattern; /* set up the struct VarData for %v */
+
+  va_start(vd.vd_args, pattern);
+  sendcmdto_neighbours_buttwo(from, cmd, tok, one, 0, "%v", &vd);
+  va_end(vd.vd_args);
+}
+
+void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
+			   const char *tok, struct Client *one, struct Client *two,
+			   const char *pattern, ...)
+{
+  struct VarData vd;
+  struct MsgBuf *mb;
+  struct DLink *lp;
+
+  vd.vd_format = pattern; /* set up the struct VarData for %v */
+  va_start(vd.vd_args, pattern);
+
+  /* use token */
+  mb = msgq_make(&me, "%C %s %v", from, tok, &vd);
+  va_end(vd.vd_args);
+
+  /* send it to our downlinks */
+  for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
+    if (one && lp->value.cptr == cli_from(one))
+      continue;
+    if (two && lp->value.cptr == cli_from(two))
+      continue;
     send_buffer(lp->value.cptr, mb, 0);
   }
 
@@ -444,8 +503,7 @@ void sendcmdto_serv_butone(struct Client *from, const char *cmd,
  * marker hits zero.
  * @param[in,out] one Client to mark with new sentalong marker (if any).
  */
-static void
-bump_sentalong(struct Client *one)
+int bump_sentalong(struct Client *one)
 {
   if (!++sentalong_marker)
   {
@@ -457,6 +515,7 @@ bump_sentalong(struct Client *one)
   }
   if (one)
     cli_sentalong(one) = sentalong_marker;
+  return sentalong_marker;
 }
 
 /** Send a (prefixed) command to all channels that \a from is on.
@@ -501,8 +560,11 @@ void sendcmdto_common_channels_butone(struct Client *from, const char *cmd,
           && -1 < cli_fd(cli_from(member->user))
           && member->user != one
           && cli_sentalong(member->user) != sentalong_marker) {
-	cli_sentalong(member->user) = sentalong_marker;
-	send_buffer(member->user, mb, 0);
+        cli_sentalong(member->user) = sentalong_marker;
+        if(check_forward_to_server(from, cli_from(member->user))) {
+          ensure_route_announced(cli_from(member->user));
+          send_buffer(member->user, mb, 0);
+        }
       }
   }
 
@@ -589,7 +651,10 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
       continue;
     cli_sentalong(member->user) = sentalong_marker;
-    send_buffer(member->user, serv_mb, 0);
+    if(check_forward_to_server(from, cli_from(member->user))) {
+      ensure_route_announced(cli_from(member->user));
+      send_buffer(member->user, serv_mb, 0);
+    }
   }
   msgq_clean(serv_mb);
 }
@@ -641,12 +706,17 @@ void sendcmdto_channel_butone(struct Client *from, const char *cmd,
         cli_fd(cli_from(member->user)) < 0 ||
         cli_sentalong(member->user) == sentalong_marker)
       continue;
-    cli_sentalong(member->user) = sentalong_marker;
-
+      
     if (MyConnect(member->user)) /* pick right buffer to send */
       send_buffer(member->user, user_mb, 0);
-    else
+    else if(check_forward_to_server(from, cli_from(member->user))) {
+      ensure_route_announced(cli_from(member->user));
       send_buffer(member->user, serv_mb, 0);
+    }
+    else
+      continue;
+    
+    cli_sentalong(member->user) = sentalong_marker;
   }
 
   msgq_clean(user_mb);
@@ -720,6 +790,9 @@ void sendwallto_group_butone(struct Client *from, int type, struct Client *one,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
+    if(!check_forward_to_server(from, lp->value.cptr))
+      continue;
+    ensure_route_announced(lp->value.cptr);
     send_buffer(lp->value.cptr, mb, 1);
   }
 
@@ -769,8 +842,10 @@ void sendcmdto_match_butone(struct Client *from, const char *cmd,
 
     if (MyConnect(cptr)) /* send right buffer */
       send_buffer(cptr, user_mb, 0);
-    else
+    else if(check_forward_to_server(from, cptr)) {
+      ensure_route_announced(cli_from(cptr));
       send_buffer(cptr, serv_mb, 0);
+    }
   }
 
   msgq_clean(user_mb);

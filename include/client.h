@@ -139,6 +139,7 @@ enum Flag
   {
     FLAG_PINGSENT,                  /**< Unreplied ping sent */
     FLAG_DEADSOCKET,                /**< Local socket is dead--Exiting soon */
+    FLAG_IMPERSONATING,             /**< Client structure is impersonating another client structure */
     FLAG_KILLED,                    /**< Prevents "QUIT" from being sent for this */
     FLAG_BLOCKED,                   /**< socket is in a blocked condition */
     FLAG_CLOSING,                   /**< set when closing to suppress errors */
@@ -146,6 +147,8 @@ enum Flag
     FLAG_HUB,                       /**< server is a hub */
     FLAG_IPV6,                      /**< server understands P10 IPv6 addrs */
     FLAG_SERVICE,                   /**< server is a service */
+    FLAG_ROUTER,                    /**< server is a router (supports message routing over loop links) */
+    FLAG_ROUTING_ENABLED,           /**< server has message routing enabled (is part of a uplink loop) */
     FLAG_GOTID,                     /**< successful ident lookup achieved */
     FLAG_NONL,                      /**< No \n in buffer */
     FLAG_TS8,                       /**< Why do you want to know? */
@@ -154,6 +157,7 @@ enum Flag
     FLAG_BURST,                     /**< Server is receiving a net.burst */
     FLAG_BURST_ACK,                 /**< Server is waiting for eob ack */
     FLAG_IPCHECK,                   /**< Added or updated IPregistry data */
+    FLAG_ANNOUNCED_SERVRT,          /**< Announced our broadcast route to this server */
     FLAG_LOCOP,                     /**< Local operator -- SRB */
     FLAG_SERVNOTICE,                /**< server notices such as kill */
     FLAG_OPER,                      /**< Operator */
@@ -187,6 +191,7 @@ struct Connection
   struct Connection*  con_next;      /**< Next connection with queued data */
   struct Connection** con_prev_p;    /**< What points to us */
   struct Client*      con_client;    /**< Client associated with connection */
+  struct Client*      con_impcli;    /**< Client this client wants to impersonate to */
   unsigned int        con_count;     /**< Amount of data in buffer */
   int                 con_freeflag;  /**< indicates if connection can be freed */
   int                 con_error;     /**< last socket level error for client */
@@ -253,6 +258,7 @@ struct Client {
   int            cli_marker;      /**< /who processing marker */
   struct Flags   cli_flags;       /**< client flags */
   unsigned int   cli_hopcount;    /**< number of servers to this 0 = local */
+  unsigned int   cli_linkcost;    /**< cost to send data to this client */
   struct irc_in_addr cli_ip;      /**< Real IP of client */
   short          cli_status;      /**< Client type */
   char cli_name[HOSTLEN + 1];     /**< Unique name of the client, nick or host */
@@ -299,6 +305,8 @@ struct Client {
 #define cli_flags(cli)		((cli)->cli_flags)
 /** Get hop count to client. */
 #define cli_hopcount(cli)	((cli)->cli_hopcount)
+/** Get link cost to client */
+#define cli_linkcost(cli) ((cli)->cli_linkcost)
 /** Get client IP address. */
 #define cli_ip(cli)		((cli)->cli_ip)
 /** Get status bitmask for client. */
@@ -509,6 +517,10 @@ struct Client {
 /** Return non-zero if the client is a registered user. */
 #define IsUser(x)               (cli_status(x) == STAT_USER)
 
+/** Return single character which helps identifiying type and status of a client. */
+#define GetClientTypeChar(x)    (IsMe(x) ? "M" : IsConnecting(x) ? "c" : IsHandshake(x) ? "H" : \
+        IsServerPort(x) ? "s" : IsUserPort(x) ? "u" : IsWebircPort(x) ? "w" : IsServer(x) ? "S" : \
+        IsUser(x) ? "U" : "?")
 
 /** Mark a client with STAT_CONNECTING. */
 #define SetConnecting(x)        (cli_status(x) = STAT_CONNECTING)
@@ -555,6 +567,8 @@ struct Client {
 #define IsChannelService(x)     HasFlag(x, FLAG_CHSERV)
 /** Return non-zero if the client's socket is disconnected. */
 #define IsDead(x)               HasFlag(x, FLAG_DEADSOCKET)
+/** Return non-zero if the client is impersonating another client. */
+#define IsImpersonating(x)      HasFlag(x, FLAG_IMPERSONATING)
 /** Return non-zero if the client has set mode +d (deaf). */
 #define IsDeaf(x)               HasFlag(x, FLAG_DEAF)
 /** Return non-zero if the client has been IP-checked for clones. */
@@ -585,6 +599,10 @@ struct Client {
 #define IsIPv6(x)               HasFlag(x, FLAG_IPV6)
 /** Return non-zero if the client claims to be a services server. */
 #define IsService(x)            HasFlag(x, FLAG_SERVICE)
+/** Return non-zero if the client claims to be a router. */
+#define IsRouter(x)             HasFlag(x, FLAG_ROUTER)
+/** Return non-zero if the client has message routing enabled. */
+#define IsRoutingEnabled(x)     HasFlag(x, FLAG_ROUTING_ENABLED)
 /** Return non-zero if the client has an account stamp. */
 #define IsAccount(x)            HasFlag(x, FLAG_ACCOUNT)
 /** Return non-zero if the client has set mode +x (hidden host). */
@@ -631,6 +649,10 @@ struct Client {
 #define SetIPv6(x)              SetFlag(x, FLAG_IPV6)
 /** Mark a client as being a services server. */
 #define SetService(x)           SetFlag(x, FLAG_SERVICE)
+/** Mark a client as being a router server. */
+#define SetRouter(x)            SetFlag(x, FLAG_ROUTER)
+/** Mark a client as having message routing enabled. */
+#define SetRoutingEnabled(x)    SetFlag(x, FLAG_ROUTING_ENABLED)
 /** Mark a client as having an account stamp. */
 #define SetAccount(x)           SetFlag(x, FLAG_ACCOUNT)
 /** Mark a client as having mode +x (hidden host). */

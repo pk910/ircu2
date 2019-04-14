@@ -74,6 +74,7 @@
   int yylex(void);
   /* Now all the globals we need :/... */
   int tping, tconn, maxlinks, sendq, port, invert, stringno, flags;
+  unsigned int linkcost;
   char *name, *pass, *host, *ip, *username, *origin, *hub_limit;
   struct SLink *hosts;
   char *stringlist[MAX_STRINGS];
@@ -466,6 +467,7 @@ classusermode: USERMODE '=' QSTRING ';'
 connectblock: CONNECT
 {
  flags = CONF_AUTOCONNECT;
+ linkcost = 0;
 } '{' connectitems '}' ';'
 {
  struct ConfItem *aconf = NULL;
@@ -494,6 +496,7 @@ connectblock: CONNECT
     */
    aconf->maximum = (hub_limit != NULL && maxlinks == 0) ? 65535 : maxlinks;
    aconf->hub_limit = hub_limit;
+   aconf->linkcost = linkcost ? linkcost : 1;
    aconf->flags = flags;
    lookup_confhost(aconf);
  }
@@ -511,7 +514,7 @@ connectblock: CONNECT
 connectitems: connectitem connectitems | connectitem;
 connectitem: connectname | connectpass | connectclass | connecthost
               | connectport | connectvhost | connectleaf | connecthub
-              | connecthublimit | connectmaxhops | connectauto;
+              | connecthublimit | connectmaxhops | connectcost | connectauto;
 connectname: NAME '=' QSTRING ';'
 {
  MyFree(name);
@@ -560,6 +563,10 @@ connecthublimit: HUB '=' QSTRING ';'
 connectmaxhops: MAXHOPS '=' expr ';'
 {
   maxlinks = $3;
+};
+connectcost: COST '=' expr ';'
+{
+  linkcost = $3;
 };
 connectauto: AUTOCONNECT '=' YES ';' { flags |= CONF_AUTOCONNECT; }
  | AUTOCONNECT '=' NO ';' { flags &= ~CONF_AUTOCONNECT; };

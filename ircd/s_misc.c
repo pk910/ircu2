@@ -50,6 +50,7 @@
 #include "s_bsd.h"
 #include "s_conf.h"
 #include "s_debug.h"
+#include "s_routing.h"
 #include "s_stats.h"
 #include "s_user.h"
 #include "send.h"
@@ -366,6 +367,14 @@ int exit_client(struct Client *cptr,
 
   char comment1[HOSTLEN + HOSTLEN + 2];
   assert(killer);
+  if (MyConnect(victim) && IsServer(victim)) {
+    remove_uplink_routes(victim, comment);
+    if(!MyConnect(victim)) {
+      // server is still liked via another uplink
+      return (cptr == victim) ? CPTR_KILLED : 0;
+    }
+  }
+  
   if (MyConnect(victim))
   {
     SetFlag(victim, FLAG_CLOSING);
@@ -400,19 +409,14 @@ int exit_client(struct Client *cptr,
         && IsClient(victim))    /* Not a Ping struct or Log file */
     {
       if (IsServer(victim) || IsHandshake(victim))
-	sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
+        sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
       else if (!IsConnecting(victim)) {
         if (!IsDead(victim)) {
-	  if (IsServer(victim))
-	    sendcmdto_one(killer, CMD_ERROR, victim,
-			  ":Closing Link: %s by %s (%s)", cli_name(victim),
-			  cli_name(killer), comment);
-	  else
-	    sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)",
-			  cli_name(victim),
-                          cli_name(IsServer(killer) ? &his : killer),
-			  comment);
-	}
+          if (IsServer(victim))
+            sendcmdto_one(killer, CMD_ERROR, victim, ":Closing Link: %s by %s (%s)", cli_name(victim), cli_name(killer), comment);
+          else
+            sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)", cli_name(victim), cli_name(IsServer(killer) ? &his : killer), comment);
+        }
       }
       if ((IsServer(victim) || IsHandshake(victim) || IsConnecting(victim)) &&
           (killer == &me || (IsServer(killer) &&

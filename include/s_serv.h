@@ -21,7 +21,7 @@ extern unsigned int max_client_count;
 extern int exit_new_server(struct Client* cptr, struct Client* sptr,
                            const char* host, time_t timestamp, const char* fmt, ...);
 extern int a_kills_b_too(struct Client *a, struct Client *b);
-extern int server_estab(struct Client *cptr, struct ConfItem *aconf);
+extern int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link);
 
 
 #endif /* INCLUDED_s_serv_h */

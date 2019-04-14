@@ -303,6 +303,20 @@ struct Message msgtab[] = {
     { mr_server, m_registered, ms_server, m_registered, m_ignore }
   },
   {
+    MSG_LINKCHANGE,
+    TOK_LINKCHANGE,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_linkchange, m_ignore, m_ignore }
+  },
+  {
+    MSG_NETROUTE,
+    TOK_NETROUTE,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_netroute, m_ignore, m_ignore }
+  },
+  {
     MSG_SQUIT,
     TOK_SQUIT,
     0, MAXPARA, MFLG_SLOW, 0, NULL,

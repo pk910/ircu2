@@ -1,7 +1,6 @@
 /*
- * IRC - Internet Relay Chat, ircd/m_map.c
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Computing Center
+ * IRC - Internet Relay Chat, ircd/m_netroute.c
+ * Copyright (C) 2010 Kevin L. Mitchell <klmitch@mit.edu>
  *
  * See file AUTHORS in IRC package for additional names of
  * the programmers.
@@ -83,132 +82,55 @@
 
 #include "client.h"
 #include "ircd.h"
-#include "ircd_defs.h"
-#include "ircd_features.h"
+#include "ircd_alloc.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
-#include "ircd_snprintf.h"
 #include "ircd_string.h"
-#include "list.h"
-#include "match.h"
 #include "msg.h"
 #include "numeric.h"
+#include "numnicks.h"
 #include "s_routing.h"
-#include "s_user.h"
-#include "s_serv.h"
 #include "send.h"
-#include "querycmds.h"
 
-/* #include <assert.h> -- Now using assert in ircd_log.h */
-#include <stdio.h>
 #include <string.h>
 
-static void dump_map(struct Client *cptr, struct Client *server, char *mask, int prompt_length)
-{
-  const char *chr;
-  static char prompt[64];
-  struct DLink *lp;
-  char *p = prompt + prompt_length;
-  int cnt, alp;
-  struct RouteLinkInfo *linkinfo;
-  
-  *p = '\0';
-  if (prompt_length > 60)
-    send_reply(cptr, RPL_MAPMORE, prompt, cli_name(server));
-  else
-  {
-    char lag[128];
-    char altlinks[298];
-    if (cli_serv(server)->lag>10000)
-      lag[0]=0;
-    else if (cli_serv(server)->lag<0)
-      strcpy(lag,"(0s)");
-    else
-      sprintf(lag,"(%is)",cli_serv(server)->lag);
-    if (IsBurst(server))
-      chr = "*";
-    else if (IsBurstAck(server))
-      chr = "!";
-    else
-      chr = "";
-    
-    alp = 0;
-    if((linkinfo = cli_serv(server)->routes)) {
-      cnt = 0;
-      while((linkinfo = linkinfo->next) && alp < 250) {
-        if(!alp)
-          alp += sprintf(altlinks, ", alt: ");
-        alp += sprintf(altlinks + alp, "%s%.2s:%u", (cnt++ ? "," : ""), linkinfo->link_client, linkinfo->link_cost);
-      }
-    }
-    altlinks[alp] = 0;
-    
-    send_reply(cptr, RPL_MAP, prompt, cli_yxx(server), chr, cli_name(server),
-               lag, (server == &me) ? UserStats.local_clients : cli_serv(server)->clients, 
-               cli_linkcost(server), altlinks);
-  }
-  if (prompt_length > 0)
-  {
-    p[-1] = ' ';
-    if (p[-2] == '`')
-      p[-2] = ' ';
-  }
-  if (prompt_length > 60)
-    return;
-  strcpy(p, "|-");
-  cnt = 0;
-  for (lp = cli_serv(server)->down; lp; lp = lp->next)
-    if (match(mask, cli_name(lp->value.cptr)))
-      ClrFlag(lp->value.cptr, FLAG_MAP);
-    else
-    {
-      SetFlag(lp->value.cptr, FLAG_MAP);
-      cnt++;
-    }
-  for (lp = cli_serv(server)->down; lp; lp = lp->next)
-  {
-    if (!HasFlag(lp->value.cptr, FLAG_MAP))
-      continue;
-    if (--cnt == 0)
-      *p = '`';
-    dump_map(cptr, lp->value.cptr, mask, prompt_length + 2);
-  }
-  if (prompt_length > 0)
-    p[-1] = '-';
-}
-
-
 /*
- * m_map - generic message handler
- * -- by Run
+ * ms_netroute - broadcast route announcement
  *
  * parv[0] = sender prefix
- * parv[1] = server mask
+ * parv[1] = route index
+ * parv[2] = route length / "+" if chunked
+ * parv[3] = route data (if length > 0)
  */
-int m_map(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+int ms_netroute(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if (feature_bool(FEAT_HIS_MAP) && !IsAnOper(sptr))
-  {
-    sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :%s %s", sptr,
-                  "/MAP has been disabled, from CFV-165.  "
-                  "Visit ", feature_str(FEAT_HIS_URLSERVERS));
+  if(parc < 3)
+    return need_more_params(sptr, "NETROUTE");
+  
+  unsigned int routeidx = atoi(parv[1]);
+  if(cli_serv(sptr)->fwd_route && routeidx <= cli_serv(sptr)->fwd_route->route_idx && 
+    !(routeidx == 1 && cli_serv(sptr)->fwd_route->route_idx >= ROUTE_INDEX_ROLLOVER) // index overflow
+   ) {
+    return 0; // ignore - we already have a newer route from sptr
+  }
+  
+  unsigned int routelen = atoi(parv[2]);
+  if(routelen > NN_MAX_SERVER) {
+    protocol_violation(cptr, "route too long.");
     return 0;
   }
-  if (parc < 2)
-    parv[1] = "*";
-  dump_map(sptr, &me, parv[1], 0);
-  send_reply(sptr, RPL_MAPEND);
-
-  return 0;
-}
-
-int mo_map(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
-{
-  if (parc < 2)
-    parv[1] = "*";
-
-  dump_map(sptr, &me, parv[1], 0);
-  send_reply(sptr, RPL_MAPEND);
-
+  
+  struct RouteInfo *netroute = MyCalloc(1, sizeof(struct RouteInfo));
+  netroute->route_idx = routeidx;
+  netroute->route_len = routelen;
+  
+  if(routelen > 0) {
+    int datalen = (routelen * 2) + 1;
+    netroute->is_ptrdata = 1;
+    netroute->route_data = MyMalloc(datalen);
+    memcpy(netroute->route_data, parv[3], datalen);
+  }
+  
+  update_server_netroute(sptr, cptr, netroute);
   return 0;
 }

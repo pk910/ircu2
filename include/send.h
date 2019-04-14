@@ -28,6 +28,7 @@ extern void send_buffer(struct Client* to, struct MsgBuf* buf, int prio);
 extern void kill_highest_sendq(int servers_too);
 extern void flush_connections(struct Client* cptr);
 extern void send_queued(struct Client *to);
+extern int bump_sentalong(struct Client *one);
 
 /* Send a raw message to one client; USE ONLY IF YOU MUST SEND SOMETHING
  * WITHOUT A PREFIX!
@@ -54,6 +55,16 @@ extern void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,
 extern void sendcmdto_serv_butone(struct Client *from, const char *cmd,
 				  const char *tok, struct Client *one,
 				  const char *pattern, ...);
+
+/* Send command to all neighbours except one */
+extern void sendcmdto_neighbours_butone(struct Client *from, const char *cmd,
+			   const char *tok, struct Client *one,
+			   const char *pattern, ...);
+         
+/* Send command to all neighbours except one and two */
+extern void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
+			   const char *tok, struct Client *one, struct Client *two,
+			   const char *pattern, ...);
 
 /* Send command to all channels user is on */
 extern void sendcmdto_common_channels_butone(struct Client *from,

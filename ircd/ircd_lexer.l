@@ -50,6 +50,7 @@ static struct lexer_token {
   TOKEN(CONNECTFREQ),
   TOKEN(MAXLINKS),
   TOKEN(MAXHOPS),
+  TOKEN(COST),
   TOKEN(SENDQ),
   TOKEN(NAME),
   TOKEN(HOST),

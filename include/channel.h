@@ -36,6 +36,7 @@
 
 struct SLink;
 struct Client;
+struct ChanRouteInfo;
 
 /*
  * General defines
@@ -271,6 +272,9 @@ struct Channel {
   time_t             creationtime; /**< Creation time of this channel */
   time_t             topic_time;   /**< Modification time of the topic */
   unsigned int       users;	   /**< Number of clients on this channel */
+  unsigned int       send_msgidx; /**< last multicast message index this server used on this channel */
+  struct ChanRouteState* own_routes; /**< propagation status of own routing information for each neighbour server */
+  struct ChanRouteInfo*  fwd_routes; /**< routing information from other servers to forward messages on this channel */
   struct Membership* members;	   /**< Pointer to the clients on this channel*/
   struct SLink*      invites;	   /**< List of invites on this channel */
   struct Ban*        banlist;      /**< List of bans on this channel */

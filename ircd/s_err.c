@@ -62,7 +62,7 @@ static Numeric replyTable[] = {
 /* 014 */
   { 0 },
 /* 015 */
-  { RPL_MAP, ":%s%s%s %s [%u clients]", "015" },
+  { RPL_MAP, ":%s[%s] %s%s %s [%u clients] (cost: %u%s)", "015" },
 /* 016 */
   { RPL_MAPMORE, ":%s%s --> *more*", "016" },
 /* 017 */
@@ -432,7 +432,7 @@ static Numeric replyTable[] = {
 /* 199 */
   { 0 },
 /* 200 */
-  { RPL_TRACELINK, "Link %s.%s %s %s", "200" },
+  { RPL_TRACELINK, "Link %s %s %s", "200" },
 /* 201 */
   { RPL_TRACECONNECTING, "Try. %s %s", "201" },
 /* 202 */
@@ -734,7 +734,7 @@ static Numeric replyTable[] = {
 /* 350 */
   { 0 },
 /* 351 */
-  { RPL_VERSION, "%s.%s %s :%s", "351" },
+  { RPL_VERSION, "%s %s :%s", "351" },
 /* 352 */
   { RPL_WHOREPLY, "%s", "352" },
 /* 353 */
@@ -760,7 +760,7 @@ static Numeric replyTable[] = {
 /* 363 */
   { RPL_CLOSEEND, "%d :Connections Closed", "363" },
 /* 364 */
-  { RPL_LINKS, "%s %s :%u P%u %s", "364" },
+  { RPL_LINKS, "%s %s :%u %u P%u %s", "364" },
 /* 365 */
   { RPL_ENDOFLINKS, "%s :End of /LINKS list.", "365" },
 /* 366 */

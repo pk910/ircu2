@@ -114,8 +114,7 @@ int m_version(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                                                            parc, parv)
                       == HUNTED_ISME)
   {
-    send_reply(sptr, RPL_VERSION, version, debugmode, cli_name(&me),
-	       debug_serveropts());
+    send_reply(sptr, RPL_VERSION, version, cli_name(&me), debug_serveropts());
     if (MyUser(sptr))
       send_supported(sptr);
   }

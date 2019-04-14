@@ -111,7 +111,7 @@ int a_kills_b_too(struct Client *a, struct Client *b)
  * @param aconf Connect block for \a cptr.
  * @return Zero.
  */
-int server_estab(struct Client *cptr, struct ConfItem *aconf)
+int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
 {
   struct Client* acptr = 0;
   const char*    inpath;
@@ -122,13 +122,13 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 
   inpath = cli_name(cptr);
 
-  if (IsUnknown(cptr)) {
+  if (IsUnknown(cptr) || (announce_link & 0x04)) {
     if (aconf->passwd[0])
       sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
     /*
      *  Pass my info to the new server
      */
-    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
+    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6r 0 :%s",
 		  cli_name(&me), cli_serv(&me)->timestamp,
 		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
 		  feature_bool(FEAT_HUB) ? "h" : "",
@@ -137,12 +137,18 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 
   det_confs_butmask(cptr, CONF_SERVER | CONF_UWORLD);
 
-  if (!IsHandshake(cptr))
+  if((announce_link & 0x01)) {
+    if (IsHandshake(cptr))
+      add_client_to_list(cptr);
     hAddClient(cptr);
+    Count_unknownbecomesserver(UserStats);
+    
+    cli_serv(cptr)->up = &me;
+    cli_serv(cptr)->updown = add_dlink(&(cli_serv(&me))->down, cptr);
+  }
+  
   SetServer(cptr);
   cli_handler(cptr) = SERVER_HANDLER;
-  Count_unknownbecomesserver(UserStats);
-  SetBurst(cptr);
 
 /*    nextping = CurrentTime; */
 
@@ -166,8 +172,6 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
   }
 
   sendto_opmask_butone(acptr, SNO_OLDSNO, "Link with %s established.", inpath);
-  cli_serv(cptr)->up = &me;
-  cli_serv(cptr)->updown = add_dlink(&(cli_serv(&me))->down, cptr);
   sendto_opmask_butone(0, SNO_NETWORK, "Net junction: %s %s", cli_name(&me),
                        cli_name(cptr));
   SetJunction(cptr);
@@ -183,19 +187,27 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
       continue;
     if (!match(cli_name(&me), cli_name(cptr)))
       continue;
-    sendcmdto_one(&me, CMD_SERVER, acptr,
-		  "%s 2 0 %Tu J%02u %s%s +%s%s%s :%s", cli_name(cptr),
-		  cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
-		  IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
-		  IsIPv6(cptr) ? "6" : "", cli_info(cptr));
+    
+    if((announce_link & 0x01))
+      sendcmdto_one(&me, CMD_SERVER, acptr,
+        "%s 2 0 %Tu J%02u %s%s +%s%s%s%s %u :%s", cli_name(cptr),
+        cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
+        IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
+        IsIPv6(cptr) ? "6" : "", "r", cli_linkcost(cptr), cli_info(cptr));
+    else if((announce_link & 0x02))
+      sendcmdto_one(&me, CMD_LINKCHANGE, acptr, "%C %C %u", cptr, cli_serv(cptr)->up, cli_linkcost(cptr));
   }
 
-  /* Send these as early as possible so that glined users/juped servers can
-   * be removed from the network while the remote server is still chewing
-   * our burst.
-   */
-  gline_burst(cptr);
-  jupe_burst(cptr);
+  /* send burst messages only if server wasn't already linked with the network via another client */
+  SetBurst(cptr);
+  if((announce_link & 0x01)) {
+    /* Send these as early as possible so that glined users/juped servers can
+     * be removed from the network while the remote server is still chewing
+     * our burst.
+     */
+    gline_burst(cptr);
+    jupe_burst(cptr);
+  }
 
   /*
    * Pass on my client information to the new server
@@ -227,42 +239,46 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
       sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
-		    "%s %d 0 %Tu %s%u %s%s +%s%s%s :%s", cli_name(acptr),
-		    cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
-		    protocol_str, Protocol(acptr), NumServCap(acptr),
-		    IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
-		    IsIPv6(acptr) ? "6" : "", cli_info(acptr));
+        "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
+        cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
+        protocol_str, Protocol(acptr), NumServCap(acptr),
+        IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
+        IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
+        cli_linkcost(acptr), cli_info(acptr));
     }
   }
 
-  for (acptr = &me; acptr; acptr = cli_prev(acptr))
-  {
-    /* acptr->from == acptr for acptr == cptr */
-    if (cli_from(acptr) == cptr)
-      continue;
-    if (IsUser(acptr))
+  if((announce_link & 0x01)) {
+    for (acptr = &me; acptr; acptr = cli_prev(acptr))
     {
-      char xxx_buf[25];
-      char *s = umode_str(acptr);
-      sendcmdto_one(cli_user(acptr)->server, CMD_NICK, cptr,
-		    "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
-		    cli_name(acptr), cli_hopcount(acptr) + 1, cli_lastnick(acptr),
-		    cli_user(acptr)->username, cli_user(acptr)->realhost,
-		    *s ? "+" : "", s, *s ? " " : "",
-		    iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf), IsIPv6(cptr)),
-		    NumNick(acptr), cli_info(acptr));
+      /* acptr->from == acptr for acptr == cptr */
+      if (cli_from(acptr) == cptr)
+        continue;
+      if (IsUser(acptr))
+      {
+        char xxx_buf[25];
+        char *s = umode_str(acptr);
+        sendcmdto_one(cli_user(acptr)->server, CMD_NICK, cptr,
+          "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
+          cli_name(acptr), cli_hopcount(acptr) + 1, cli_lastnick(acptr),
+          cli_user(acptr)->username, cli_user(acptr)->realhost,
+          *s ? "+" : "", s, *s ? " " : "",
+          iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf), IsIPv6(cptr)),
+          NumNick(acptr), cli_info(acptr));
+      }
+    }
+    /*
+     * Last, send the BURST.
+     * (Or for 2.9 servers: pass all channels plus statuses)
+     */
+    {
+      struct Channel *chptr;
+      for (chptr = GlobalChannelList; chptr; chptr = chptr->next)
+        send_channel_modes(cptr, chptr);
     }
   }
-  /*
-   * Last, send the BURST.
-   * (Or for 2.9 servers: pass all channels plus statuses)
-   */
-  {
-    struct Channel *chptr;
-    for (chptr = GlobalChannelList; chptr; chptr = chptr->next)
-      send_channel_modes(cptr, chptr);
-  }
   sendcmdto_one(&me, CMD_END_OF_BURST, cptr, "");
+  
   return 0;
 }
 

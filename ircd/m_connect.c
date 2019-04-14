@@ -153,7 +153,7 @@ int ms_connect(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /*
    * use aconf->name to look up the server
    */
-  if ((acptr = FindServer(aconf->name))) {
+  if ((acptr = FindServer(aconf->name)) && MyConnect(acptr)) {
     sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Connect: Server %s already "
 		  "exists from %s", sptr, parv[1], cli_name(cli_from(acptr)));
     return 0;
@@ -282,7 +282,7 @@ int mo_connect(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /*
    * use aconf->name to look up the server, see above
    */
-  if ((acptr = FindServer(aconf->name))) {
+  if ((acptr = FindServer(aconf->name)) && MyConnect(acptr)) {
     sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Connect: Server %s already "
 		  "exists from %s", sptr, parv[1], cli_name(cli_from(acptr)));
     return 0;

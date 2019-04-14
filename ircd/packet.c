@@ -30,6 +30,7 @@
 #include "ircd_log.h"
 #include "parse.h"
 #include "s_bsd.h"
+#include "s_debug.h"
 #include "s_misc.h"
 #include "send.h"
 
@@ -90,8 +91,10 @@ int server_dopacket(struct Client* cptr, const char* buffer, int length)
 
       update_messages_received(cptr);
 
+      Debug((DEBUG_PROTO, "RECV [%s:%s] %s", GetClientTypeChar(cptr), cptr->cli_yxx, cli_buffer(cptr)));
       if (parse_server(cptr, cli_buffer(cptr), endp) == CPTR_KILLED)
         return CPTR_KILLED;
+      
       /*
        *  Socket is dead so exit
        */
@@ -101,8 +104,13 @@ int server_dopacket(struct Client* cptr, const char* buffer, int length)
     }
     else if (endp < client_buffer + BUFSIZE)
       ++endp;                   /* There is always room for the null */
+    
+    if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli) {
+      cptr = cli_connect(cptr)->con_impcli;
+    }
   }
   cli_count(cptr) = endp - cli_buffer(cptr);
+  
   return 1;
 }
 
@@ -145,6 +153,7 @@ int connect_dopacket(struct Client *cptr, const char *buffer, int length)
 
       update_messages_received(cptr);
 
+      Debug((DEBUG_PROTO, "RECV [%s:%s] %s", GetClientTypeChar(cptr), cptr->cli_yxx, cli_buffer(cptr)));
       if (parse_client(cptr, cli_buffer(cptr), endp) == CPTR_KILLED)
         return CPTR_KILLED;
       /* Socket is dead so exit */
@@ -160,6 +169,10 @@ int connect_dopacket(struct Client *cptr, const char *buffer, int length)
     else if (endp < client_buffer + BUFSIZE)
       /* There is always room for the null */
       ++endp;
+    
+    if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli) {
+      cptr = cli_connect(cptr)->con_impcli;
+    }
   }
   cli_count(cptr) = endp - cli_buffer(cptr);
   return 1;
@@ -177,6 +190,7 @@ int client_dopacket(struct Client *cptr, unsigned int length)
   update_bytes_received(cptr, length);
   update_messages_received(cptr);
 
+  Debug((DEBUG_PROTO, "RECV [%s:%s] %s", GetClientTypeChar(cptr), cptr->cli_yxx, cli_buffer(cptr)));
   if (CPTR_KILLED == parse_client(cptr, cli_buffer(cptr), cli_buffer(cptr) + length))
     return CPTR_KILLED;
   else if (IsDead(cptr))
