@@ -918,6 +918,7 @@ static void client_sock_callback(struct Event* ev)
     assert(0 && "Unrecognized socket event in client_sock_callback()");
     break;
   }
+  assert(0 == cptr || 0 == cli_connect(cptr) || con == cli_connect(cptr));
 
   if (fallback) {
     const char* msg = (cli_error(cptr)) ? strerror(cli_error(cptr)) : fallback;

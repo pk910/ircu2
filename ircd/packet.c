@@ -95,6 +95,9 @@ int server_dopacket(struct Client* cptr, const char* buffer, int length)
       if (parse_server(cptr, cli_buffer(cptr), endp) == CPTR_KILLED)
         return CPTR_KILLED;
       
+      if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli)
+        cptr = cli_connect(cptr)->con_impcli;
+      
       /*
        *  Socket is dead so exit
        */
@@ -104,10 +107,6 @@ int server_dopacket(struct Client* cptr, const char* buffer, int length)
     }
     else if (endp < client_buffer + BUFSIZE)
       ++endp;                   /* There is always room for the null */
-    
-    if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli) {
-      cptr = cli_connect(cptr)->con_impcli;
-    }
   }
   cli_count(cptr) = endp - cli_buffer(cptr);
   
@@ -156,6 +155,10 @@ int connect_dopacket(struct Client *cptr, const char *buffer, int length)
       Debug((DEBUG_PROTO, "RECV [%s:%s] %s", GetClientTypeChar(cptr), cptr->cli_yxx, cli_buffer(cptr)));
       if (parse_client(cptr, cli_buffer(cptr), endp) == CPTR_KILLED)
         return CPTR_KILLED;
+      
+      if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli)
+        cptr = cli_connect(cptr)->con_impcli;
+      
       /* Socket is dead so exit */
       if (IsDead(cptr))
         return exit_client(cptr, cptr, &me, cli_info(cptr));
@@ -169,10 +172,6 @@ int connect_dopacket(struct Client *cptr, const char *buffer, int length)
     else if (endp < client_buffer + BUFSIZE)
       /* There is always room for the null */
       ++endp;
-    
-    if(IsImpersonating(cptr) && cli_connect(cptr)->con_impcli) {
-      cptr = cli_connect(cptr)->con_impcli;
-    }
   }
   cli_count(cptr) = endp - cli_buffer(cptr);
   return 1;
