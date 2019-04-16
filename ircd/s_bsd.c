@@ -936,6 +936,9 @@ static void client_sock_callback(struct Event* ev)
     SetFlag(cptr, FLAG_DEADSOCKET);
     cli_connect(cptr) = make_connection();
     cli_from(cptr) = cptr;
+    
+    // exit the old client with the dummy connection
+    exit_client(cptr, cptr, &me, "impersonated");
   }
 }
 
