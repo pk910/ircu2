@@ -52,6 +52,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "struct.h"
@@ -229,6 +230,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
     if (cli_from(acptr) == cptr)
       continue;
     if (IsServer(acptr)) {
+      struct RouteList *route;
       const char* protocol_str;
 
       if (Protocol(acptr) > 9)
@@ -238,13 +240,19 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
 
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
-      sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
-        "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
-        cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
-        protocol_str, Protocol(acptr), NumServCap(acptr),
-        IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
-        IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
-        cli_linkcost(acptr), cli_info(acptr));
+      
+      if(!(announce_link & 0x01) && (route = cli_serv(acptr)->routes))
+        sendcmdto_one(&me, CMD_LINKCHANGE, cptr, 
+          "%.2s %.2s %u", cli_yxx(acptr), route->link_parent, 
+          cli_linkcost(acptr));
+      else
+        sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
+          "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
+          cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
+          protocol_str, Protocol(acptr), NumServCap(acptr),
+          IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
+          IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
+          cli_linkcost(acptr), cli_info(acptr));
     }
   }
 
@@ -276,8 +284,8 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
       for (chptr = GlobalChannelList; chptr; chptr = chptr->next)
         send_channel_modes(cptr, chptr);
     }
+    sendcmdto_one(&me, CMD_END_OF_BURST, cptr, "");
   }
-  sendcmdto_one(&me, CMD_END_OF_BURST, cptr, "");
   
   return 0;
 }

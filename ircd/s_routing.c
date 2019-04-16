@@ -64,6 +64,7 @@ static void update_server_parent(struct Client *server);
 static void update_server_parent_recursive(struct Client *downlink, unsigned int hopcount);
 static void update_server_uplink(struct Client *server);
 static void update_server_uplink_recursive(struct Client *server, struct Client *uplink);
+static void deprecate_own_server_routes();
 static void remove_uplink_routes_recursive(struct Client *uplink, struct Client *client, unsigned int linkcost, const char *comment);
 static void free_routeinfo(struct RouteInfo *routeinfo);
 static void build_route_recursive(struct Client *server, struct RouteInfo *netroute, int *routehint_ptr);
@@ -81,6 +82,7 @@ static void announce_server_route(struct Client *client, struct Client *server, 
  * we ensure that entries via local uplinks are always at the top even if there is a better
  * route available via another server.
  *
+ * @param cptr The client we're receiving the announcement on
  * @param server The client which is got announced
  * @param uplink The local client we're receiving the announcement from
  * @param parent The client which is announced to be directly connected to `server`
@@ -91,16 +93,15 @@ static void announce_server_route(struct Client *client, struct Client *server, 
            2 if the update changed something and no more uplink route present for server
  *         0 otherwise
  */
-int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment) {
+int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment) {
   struct RouteList *cnode, *link_node = NULL, *prev_node = NULL, *link_prev = NULL, *cost_prev = NULL;
-  //struct Client *cfrom;
   int is_local_route = (server == uplink);  // is the updated route a local route?
   int is_lowest_cost = 0; // is this route the best one?
   int new_lowest_link = 0; // has the lowest link to the server changed?
   int do_reinsert_route = 0; // need to remove (if existing) and reinsert (if not denounced) route to routes list (ensuring list order)
   int do_reparent_server = 0; // need to reparent the server in the local server link tree
   int route_count = 0;
-  int has_forwarded = 0; // have we forwarded this update our neighbours?
+  int forward_advertisement = 0; // do we have forwarded this update to our neighbours?
   assert(0 != cli_serv(server));
   assert(0 != cli_local(uplink) || 0 == parent);
   
@@ -233,26 +234,29 @@ int update_server_route(struct Client *server, struct Client *uplink, struct Cli
   
   // check if there is still a route present
   if(route_count) {
+    cnode = cli_serv(server)->routes;
+    
     // update position in local server tree if needed
     if(do_reparent_server || new_lowest_link) {
-      cli_linkcost(server) = cli_serv(server)->routes->link_cost;
+      cli_linkcost(server) = cnode->link_cost;
+      deprecate_own_server_routes();
+      
       update_server_parent(server);
     }
     
     // update primary uplink if needed
     if(new_lowest_link) {
       update_server_uplink(server);
-      
+      forward_advertisement = 1;
+    }
+    
+    if(forward_advertisement) {
       // forward to neighbours
-      
-      if(parent && route_count > 1) {
-        sendcmdto_neighbours_butone(&me, CMD_LINKCHANGE, uplink, "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
-        has_forwarded = 1;
-      }
+      if(parent)
+        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, cptr, server, "%.2s %.2s %u", cli_yxx(server), cnode->link_parent, cli_linkcost(server));
       else if(!parent && route_count <= 1) {
-        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, uplink, cli_from(server), "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
+        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, cptr, cli_from(server), "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
         sendcmdto_prio_one(&me, CMD_LINKCHANGE, cli_from(server), "%C %C - :%s", server, uplink, comment);
-        has_forwarded = 1;
       }
     }
   }
@@ -260,11 +264,11 @@ int update_server_route(struct Client *server, struct Client *uplink, struct Cli
     // no more neighbours but uplink must assume there is still one (would have sent a SQUIT if not)
     // probably a timing issue, so we exit the server ourself to ensure this is properly propagated
     if(!linkcost)
-      exit_client(uplink, server, uplink, comment);
-    has_forwarded = 2;
+      exit_client(cptr, server, uplink, comment);
+    forward_advertisement = 2;
   }
   
-  return has_forwarded;
+  return forward_advertisement;
 }
 
 static void update_server_parent(struct Client *server) {
@@ -289,10 +293,6 @@ static void update_server_parent_recursive(struct Client *server, unsigned int h
   
   // update client hopcount
   cli_hopcount(server) = hopcount;
-  
-  // mark own broadcast route for this server as deprecated
-  if(cli_serv(server)->own_route)
-   cli_serv(server)->own_route->is_deprecated = 1;
   
   // loop through all downlinks
   for (link = cli_serv(server)->down; link; link = link->next)
@@ -341,6 +341,15 @@ static void update_server_uplink_recursive(struct Client *server, struct Client 
   for (i = 0; i <= cli_serv(server)->nn_mask; ++acptrp, ++i) {
     if (*acptrp)
       cli_connect(*acptrp) = cli_connect(uplink);
+  }
+}
+
+static void deprecate_own_server_routes() {
+  // mark own broadcast routes as deprecated
+  struct DLink *link;
+  for (link = cli_serv(&me)->down; link; link = link->next) {
+    if(cli_serv(link->value.cptr)->own_route)
+      cli_serv(link->value.cptr)->own_route->is_deprecated = 1;
   }
 }
 
@@ -406,7 +415,7 @@ static void remove_uplink_routes_recursive(struct Client *uplink, struct Client 
    * this may change the position of lncli in the server link tree,
    * so it could be that it is no longer a downlink of `uplink`
    */
-  update_server_route(client, uplink, NULL, linkcost, comment);
+  update_server_route(uplink, client, uplink, NULL, linkcost, comment);
 }
 
 /** Clear all routing related structs and clear references in server struct
@@ -539,6 +548,8 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
   struct RouteInfo routebuf;
   unsigned int routelen = netroute->route_len * 2;
   
+  RouteLinkNumSet(netroute->route_src, uplink);
+  
   if(routelen > 0) {
     memset(&routebuf, 0, sizeof(struct RouteInfo));
     routebuf.route_idx = netroute->route_idx;
@@ -547,8 +558,6 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
     for (link = cli_serv(&me)->down; link; link = link->next) {
       lncli = link->value.cptr;
       if(lncli == uplink)
-        continue;
-      if(!IsRoutingEnabled(lncli))
         continue;
       
       rtfound = 0;
@@ -574,7 +583,7 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
         subroute = build_forward_route(lncli, netroute, &rthint, &routebuf);
       }
       else {
-        if(check_forward_to_server(server, lncli)) {
+        if(check_forward_to_server_route(server, lncli)) {
           subroute = &routebuf;
           subroute->route_len = 0;
         }
@@ -593,39 +602,43 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
   cli_serv(server)->fwd_route = netroute;
 }
 
-int check_forward_to_server(struct Client *server, struct Client *uplink) {
-  if(IsUser(server))
-    server = cli_user(server)->server;
-  if(!IsRoutingEnabled(uplink))
-    return 1;
-  if(!cli_serv(server)->fwd_route)
-    return 1;
-  if(cli_serv(server)->fwd_route->route_len == 0)
-    return 0;
-  
-  const char *netroute = cli_serv(server)->fwd_route->route_data;
-  int i;
-  
-  for(i = 0; netroute[i]; i+=2) {
-    if(RouteLinkNumIs((netroute + i), uplink))
-      return 1;
-  }
-  return 0;
-}
-
-void ensure_route_announced(struct Client *server) {
+int check_forward_to_server_route(struct Client *source, struct Client *target) {
+  struct Client *server, *uplink;
   struct RouteInfo *routeinfo;
+  int i;
+  if(IsUser(source))
+    source = cli_user(source)->server;
   
-  assert(0 != server);
-  if(!cli_serv(server) || !IsRoutingEnabled(server))
-    return;
+  if(IsUser(target))
+    server = cli_user(target)->server;
+  else if(IsServer(target))
+    server = target;
+  else
+    return 1;
+  if(server == &me)
+    return 1;
+  uplink = cli_from(server);
   
-  if(!(routeinfo = cli_serv(server)->own_route) || cli_serv(server)->own_route->is_deprecated)
-    routeinfo = build_broadcast_route(server);
-  
-  if(routeinfo && !routeinfo->is_announced) {
-    routeinfo->is_announced = 1;
-    announce_server_route(server, &me, routeinfo);
+  if(source == &me) {
+    if(!(routeinfo = cli_serv(uplink)->own_route) || cli_serv(uplink)->own_route->is_deprecated)
+      routeinfo = build_broadcast_route(uplink);
+    if(!routeinfo->is_announced) {
+      announce_server_route(uplink, &me, routeinfo);
+      routeinfo->is_announced = 1;
+    }
+    return 1;
+  }
+  else {
+    if(!(routeinfo = cli_serv(source)->fwd_route))
+      return 1;
+    if(routeinfo->route_len == 0)
+      return 0;
+    
+    for(i = 0; routeinfo->route_data[i]; i+=2) {
+      if(RouteLinkNumIs((routeinfo->route_data + i), uplink))
+        return 1;
+    }
+    return 0;
   }
 }
 
@@ -635,7 +648,7 @@ static void announce_server_route(struct Client *client, struct Client *server, 
   
   if(routeinfo->route_len == 0) {
     // empty route
-    sendcmdto_prio_one(server, CMD_NETROUTE, client, "%u 0", routeinfo->route_idx);
+    sendcmdto_prio_one(&me, CMD_NETROUTE, client, "%C %u 0", server, routeinfo->route_idx);
     return;
   }
   
@@ -647,10 +660,30 @@ static void announce_server_route(struct Client *client, struct Client *server, 
       routelen = BUFSIZE - 30; // leave some space for header
     
     if(routepos == 0)
-      sendcmdto_prio_one(server, CMD_NETROUTE, client, "%u %u %.*s", routeinfo->route_idx, routeinfo->route_len, routelen, routeinfo->route_data);
+      sendcmdto_prio_one(&me, CMD_NETROUTE, client, "%C %u %u %.*s", server, routeinfo->route_idx, routeinfo->route_len, routelen, routeinfo->route_data);
     else
-      sendcmdto_prio_one(server, CMD_NETROUTE, client, "%u + %.*s", routeinfo->route_idx, routelen, routeinfo->route_data + routepos);
+      sendcmdto_prio_one(&me, CMD_NETROUTE, client, "%C %u + %.*s", server, routeinfo->route_idx, routelen, routeinfo->route_data + routepos);
     
     routepos += routelen;
   } while(routepos < routestrlen);
+}
+
+int check_received_from_server_route(struct Client *client, struct Client *source) {
+  struct RouteInfo *routeinfo;
+  struct RouteList *cnode;
+  if(IsUser(source))
+    source = cli_user(source)->server;
+  
+  if(!(routeinfo = cli_serv(source)->fwd_route))
+    return 0;
+  if(RouteLinkNumIs(routeinfo->route_src, client))
+    return 1;
+  
+  // check if we can see source on client links
+  for(cnode = cli_serv(source)->routes; cnode; cnode = cnode->next) {
+    if(RouteLinkNumIs(cnode->link_client, client))
+      return 1;
+  }
+  
+  return 0;
 }

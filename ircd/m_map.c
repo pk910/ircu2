@@ -145,7 +145,11 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
     
     send_reply(cptr, RPL_MAP, prompt, cli_yxx(server), chr, cli_name(server),
                lag, (server == &me) ? UserStats.local_clients : cli_serv(server)->clients, 
-               cli_linkcost(server), altlinks);
+               cli_linkcost(server), altlinks, 
+               (cli_serv(server)->own_route ? cli_serv(server)->own_route->route_data : ""),
+               (cli_serv(server)->fwd_route ? cli_serv(server)->fwd_route->route_src : ""), 
+               (cli_serv(server)->fwd_route ? cli_serv(server)->fwd_route->route_data : "")
+              );
   }
   if (prompt_length > 0)
   {

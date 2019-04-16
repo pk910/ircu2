@@ -98,23 +98,28 @@
  * ms_netroute - broadcast route announcement
  *
  * parv[0] = sender prefix
- * parv[1] = route index
- * parv[2] = route length / "+" if chunked
- * parv[3] = route data (if length > 0)
+ * parv[1] = source numnick
+ * parv[2] = route index
+ * parv[3] = route length / "+" if chunked
+ * parv[4] = route data (if length > 0)
  */
 int ms_netroute(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if(parc < 3)
+  if(parc < 4)
     return need_more_params(sptr, "NETROUTE");
   
-  unsigned int routeidx = atoi(parv[1]);
-  if(cli_serv(sptr)->fwd_route && routeidx <= cli_serv(sptr)->fwd_route->route_idx && 
-    !(routeidx == 1 && cli_serv(sptr)->fwd_route->route_idx >= ROUTE_INDEX_ROLLOVER) // index overflow
+  struct Client* acptr;
+  if(!(acptr = FindNServer(parv[1])))
+    return 0;
+  
+  unsigned int routeidx = atoi(parv[2]);
+  if(cli_serv(acptr)->fwd_route && routeidx <= cli_serv(acptr)->fwd_route->route_idx && 
+    !(routeidx == 1 && cli_serv(acptr)->fwd_route->route_idx >= ROUTE_INDEX_ROLLOVER) // index overflow
    ) {
-    return 0; // ignore - we already have a newer route from sptr
+    return 0; // ignore - we already have a newer route from acptr
   }
   
-  unsigned int routelen = atoi(parv[2]);
+  unsigned int routelen = atoi(parv[3]);
   if(routelen > NN_MAX_SERVER) {
     protocol_violation(cptr, "route too long.");
     return 0;
@@ -128,9 +133,9 @@ int ms_netroute(struct Client* cptr, struct Client* sptr, int parc, char* parv[]
     int datalen = (routelen * 2) + 1;
     netroute->is_ptrdata = 1;
     netroute->route_data = MyMalloc(datalen);
-    memcpy(netroute->route_data, parv[3], datalen);
+    memcpy(netroute->route_data, parv[4], datalen);
   }
   
-  update_server_netroute(sptr, cptr, netroute);
+  update_server_netroute(acptr, cptr, netroute);
   return 0;
 }

@@ -400,10 +400,9 @@ void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,
       continue;
     if ((forbid < FLAG_LAST_FLAG) && HasFlag(lp->value.cptr, forbid))
       continue;
-    if(!check_forward_to_server(from, lp->value.cptr))
+    if(!check_forward_to_server_route(from, lp->value.cptr))
       continue;
     
-    ensure_route_announced(lp->value.cptr);
     send_buffer(lp->value.cptr, mb, 0);
   }
 
@@ -437,10 +436,9 @@ void sendcmdto_serv_butone(struct Client *from, const char *cmd,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
-    if(!check_forward_to_server(from, lp->value.cptr))
+    if(!check_forward_to_server_route(from, lp->value.cptr))
       continue;
     
-    ensure_route_announced(lp->value.cptr);
     send_buffer(lp->value.cptr, mb, 0);
   }
 
@@ -559,12 +557,10 @@ void sendcmdto_common_channels_butone(struct Client *from, const char *cmd,
       if (MyConnect(member->user)
           && -1 < cli_fd(cli_from(member->user))
           && member->user != one
-          && cli_sentalong(member->user) != sentalong_marker) {
+          && cli_sentalong(member->user) != sentalong_marker
+          && check_forward_to_server_route(from, member->user)) {
         cli_sentalong(member->user) = sentalong_marker;
-        if(check_forward_to_server(from, cli_from(member->user))) {
-          ensure_route_announced(cli_from(member->user));
-          send_buffer(member->user, mb, 0);
-        }
+        send_buffer(member->user, mb, 0);
       }
   }
 
@@ -651,8 +647,7 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
       continue;
     cli_sentalong(member->user) = sentalong_marker;
-    if(check_forward_to_server(from, cli_from(member->user))) {
-      ensure_route_announced(cli_from(member->user));
+    if(check_forward_to_server_route(from, member->user)) {
       send_buffer(member->user, serv_mb, 0);
     }
   }
@@ -709,12 +704,8 @@ void sendcmdto_channel_butone(struct Client *from, const char *cmd,
       
     if (MyConnect(member->user)) /* pick right buffer to send */
       send_buffer(member->user, user_mb, 0);
-    else if(check_forward_to_server(from, cli_from(member->user))) {
-      ensure_route_announced(cli_from(member->user));
+    else if(check_forward_to_server_route(from, member->user))
       send_buffer(member->user, serv_mb, 0);
-    }
-    else
-      continue;
     
     cli_sentalong(member->user) = sentalong_marker;
   }
@@ -790,9 +781,8 @@ void sendwallto_group_butone(struct Client *from, int type, struct Client *one,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
-    if(!check_forward_to_server(from, lp->value.cptr))
+    if(!check_forward_to_server_route(from, lp->value.cptr))
       continue;
-    ensure_route_announced(lp->value.cptr);
     send_buffer(lp->value.cptr, mb, 1);
   }
 
@@ -842,10 +832,8 @@ void sendcmdto_match_butone(struct Client *from, const char *cmd,
 
     if (MyConnect(cptr)) /* send right buffer */
       send_buffer(cptr, user_mb, 0);
-    else if(check_forward_to_server(from, cptr)) {
-      ensure_route_announced(cli_from(cptr));
+    else if(check_forward_to_server_route(from, cptr))
       send_buffer(cptr, serv_mb, 0);
-    }
   }
 
   msgq_clean(user_mb);
@@ -922,7 +910,7 @@ void vsendto_opmask_butone(struct Client *one, unsigned int mask,
 		 &vd);
 
   for (; opslist; opslist = opslist->next)
-    if (opslist->value.cptr != one)
+    if (opslist->value.cptr != one && check_forward_to_server_route(&me, opslist->value.cptr))
       send_buffer(opslist->value.cptr, mb, 0);
 
   msgq_clean(mb);

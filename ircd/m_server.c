@@ -704,7 +704,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if(!linkcost)
     linkcost = 1;
   
-  update_server_route(acptr, acptr, &me, linkcost, NULL);
+  update_server_route(acptr, acptr, acptr, &me, linkcost, NULL);
   ret = server_estab(acptr, aconf, announce_link);
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
@@ -801,7 +801,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     /* we already know the server, so do not continue processing here
      * use the provided information as a link change advertisement
      */
-    update_server_route(acptr, cptr, sptr, linkcost, NULL);
+    update_server_route(cptr, acptr, cptr, sptr, linkcost, NULL);
     return 0;
   }
 
@@ -840,7 +840,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   add_client_to_list(acptr);
   hAddClient(acptr);
   
-  update_server_route(acptr, cptr, sptr, linkcost, NULL);
+  update_server_route(cptr, acptr, cptr, sptr, linkcost, NULL);
   
   if (*parv[5] == 'J')
   {

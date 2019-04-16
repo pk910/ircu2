@@ -132,6 +132,6 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
     comment = "routing failed";
   }
   
-  update_server_route(acptr, cptr, (linkcost ? parent : NULL), linkcost, comment);
+  update_server_route(cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost, comment);
   return 0;
 }

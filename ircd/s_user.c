@@ -830,10 +830,8 @@ void send_umode_out(struct Client *cptr, struct Client *sptr,
   for (i = HighestFd; i >= 0; i--)
   {
     if ((acptr = LocalClientArray[i]) && IsServer(acptr) &&
-        (acptr != cptr) && (acptr != sptr) && check_forward_to_server(sptr, cli_from(acptr)) && *umodeBuf) {
-      ensure_route_announced(cli_from(acptr));
+        (acptr != cptr) && (acptr != sptr) && check_forward_to_server_route(sptr, acptr) && *umodeBuf)
       sendcmdto_one(sptr, CMD_MODE, acptr, "%s :%s", cli_name(sptr), umodeBuf);
-    }
   }
   if (cptr && MyUser(cptr))
     send_umode(cptr, sptr, old, ALL_UMODES);

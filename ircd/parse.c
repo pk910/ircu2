@@ -46,6 +46,7 @@
 #include "s_debug.h"
 #include "s_misc.h"
 #include "s_numeric.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "struct.h"
@@ -1125,7 +1126,7 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
     /* Let para[0] point to the name of the sender */
     para[0] = cli_name(from);
 
-    if (cli_from(from) != cptr)
+    if (cli_from(from) != cptr && !check_received_from_server_route(cptr, from))
     {
       ServerStats->is_wrdi++;
       Debug((DEBUG_NOTICE, "Fake direction: Message (%s) coming from (%s)",

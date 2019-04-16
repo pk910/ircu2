@@ -36,6 +36,7 @@ struct RouteInfo {
   unsigned int is_announced  :  1; /**< is route announced to client */
   unsigned int route_len     : 28; /**< number of numnicks in route_xyy */
   unsigned int route_idx     : 32; /**< incremental version index of this route */
+  char         route_src      [ 2];/**< numnick of the server we received this route from */
   char        *route_data;
 };
 
@@ -56,7 +57,7 @@ struct RouteList {
 #define RouteLinkNumSet(num, cli) (memcpy(num, cli_yxx(cli), 2))
 
 /* routing functions */
-extern int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment);
+extern int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment);
 extern void remove_uplink_routes(struct Client *uplink, const char *comment);
 extern void free_server_routes(struct Client *uplink);
 extern void impersonate_client(struct Client *client, struct Client *victim);
@@ -65,7 +66,8 @@ extern struct RouteInfo *build_broadcast_route(struct Client *server);
 extern struct RouteInfo *build_forward_route(struct Client *uplink, struct RouteInfo *netroute, int *routehint, struct RouteInfo *outbuf);
 
 extern void update_server_netroute(struct Client *server, struct Client *uplink, struct RouteInfo *netroute);
-extern int check_forward_to_server(struct Client *server, struct Client *uplink);
-extern void ensure_route_announced(struct Client *server);
+
+extern int check_forward_to_server_route(struct Client *server, struct Client *uplink);
+extern int check_received_from_server_route(struct Client *server, struct Client *source);
 
 #endif /* INCLUDED_s_routing_h */

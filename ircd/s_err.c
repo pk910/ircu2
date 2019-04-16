@@ -62,7 +62,7 @@ static Numeric replyTable[] = {
 /* 014 */
   { 0 },
 /* 015 */
-  { RPL_MAP, ":%s[%s] %s%s %s [%u clients] (cost: %u%s)", "015" },
+  { RPL_MAP, ":%s[%s] %s%s %s [%u clients] (cost: %u%s)  route: %s  fwd %.2s: %s", "015" },
 /* 016 */
   { RPL_MAPMORE, ":%s%s --> *more*", "016" },
 /* 017 */
