@@ -132,10 +132,6 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
     comment = "routing failed";
   }
   
-  if(update_server_route(acptr, cptr, (linkcost ? parent : NULL), linkcost))
-    sendcmdto_neighbours_butone(&me, CMD_LINKCHANGE, cptr, "%C %C %u", acptr, cli_serv(acptr)->up, cli_linkcost(acptr));
-  else if(!cli_serv(acptr)->routes)
-    exit_client(cptr, acptr, parent, comment);
-  
+  update_server_route(acptr, cptr, (linkcost ? parent : NULL), linkcost, comment);
   return 0;
 }

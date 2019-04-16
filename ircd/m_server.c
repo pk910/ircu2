@@ -668,10 +668,11 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   
   announce_link = 0;
   if(IsUnknown(cptr))
-    announce_link |= 0x04;
+    announce_link |= 0x02;
   
-  if(acptr) 
+  if(acptr) {
     impersonate_client(cptr, acptr);
+  }
   else {
     acptr = cptr;
     announce_link |= 0x01;
@@ -691,6 +692,9 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /* Attach any necessary UWorld config items. */
   attach_confs_byhost(acptr, host, CONF_UWORLD);
   
+  recv_time = TStime();
+  check_start_timestamp(acptr, timestamp, start_timestamp, recv_time);
+  
   if (parc > 9)
     linkcost = atoi(parv[8]);
   else
@@ -699,16 +703,10 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   linkcost += aconf->linkcost;
   if(!linkcost)
     linkcost = 1;
-  cli_linkcost(acptr) = linkcost;
   
-  if(update_server_route(acptr, acptr, &me, linkcost))
-    announce_link |= 0x02;
-
-  recv_time = TStime();
-  check_start_timestamp(acptr, timestamp, start_timestamp, recv_time);
- 
+  update_server_route(acptr, acptr, &me, linkcost, NULL);
   ret = server_estab(acptr, aconf, announce_link);
-
+  
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
       labs(cli_serv(acptr)->timestamp - recv_time) > 30) {
     sendto_opmask_butone(0, SNO_OLDSNO, "Connected to a net with a "
@@ -753,8 +751,6 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   time_t           start_timestamp;
   time_t           timestamp;
   unsigned int     linkcost;
-  int              announce_link;
-  int              is_new_link;
 
   if (parc < 8)
   {
@@ -792,7 +788,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return exit_client_msg(cptr, cptr, &me,
                            "No server info specified for %s", host);
 
-  if (parc > 7) {
+  if (parc > 8) {
     if((linkcost = atoi(parv[8])) < hop)
       linkcost = hop;
   }
@@ -805,54 +801,46 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     /* we already know the server, so do not continue processing here
      * use the provided information as a link change advertisement
      */
-    if(update_server_route(acptr, cptr, sptr, linkcost))
-      sendcmdto_neighbours_butone(&me, CMD_LINKCHANGE, cptr, "%C %C %u", acptr, cli_serv(acptr)->up, cli_linkcost(acptr));
-    
+    update_server_route(acptr, cptr, sptr, linkcost, NULL);
     return 0;
   }
 
   ret = check_loop_and_lh(cptr, sptr, NULL, host, parv[6], timestamp, hop, parv[5][0] == 'J');
   if (ret != 1)
     return ret;
-
-  acptr = FindNServer(parv[6]);
-  if(!acptr) {
-    /*
-     * Server is informing about a new server behind
-     * this link. Create REMOTE server structure,
-     * add it to list and propagate word to my other
-     * server links...
-     */
-    is_new_link = 1;
-    acptr = make_client(cptr, STAT_SERVER);
-    make_server(acptr);
-    cli_serv(acptr)->prot = prot;
-    cli_serv(acptr)->timestamp = timestamp;
-    cli_hopcount(acptr) = hop;
-    ircd_strncpy(cli_name(acptr), host, HOSTLEN);
-    ircd_strncpy(cli_info(acptr), parv[parc-1], REALLEN);
-    cli_serv(acptr)->up = sptr;
-    cli_serv(acptr)->updown = add_dlink(&(cli_serv(sptr))->down, acptr);
-    /* Use cptr, because we do protocol 9 -> 10 translation
-       for numeric nicks ! */
-    SetServerYXX(cptr, acptr, parv[6]);
-    
-    /* Attach any necessary UWorld config items. */
-    attach_confs_byhost(cptr, host, CONF_UWORLD);
-    
-    if (*parv[7] == '+')
-      set_server_flags(acptr, parv[7] + 1);
-    
-    Count_newremoteserver(UserStats);
-    if (Protocol(acptr) < 10)
-      SetFlag(acptr, FLAG_TS8);
-    add_client_to_list(acptr);
-    hAddClient(acptr);
-  }
-  else
-    is_new_link = 0;
   
-  announce_link = update_server_route(acptr, cptr, sptr, linkcost);
+  /*
+   * Server is informing about a new server behind
+   * this link. Create REMOTE server structure,
+   * add it to list and propagate word to my other
+   * server links...
+   */
+  acptr = make_client(cptr, STAT_SERVER);
+  make_server(acptr);
+  cli_serv(acptr)->prot = prot;
+  cli_serv(acptr)->timestamp = timestamp;
+  cli_hopcount(acptr) = hop;
+  ircd_strncpy(cli_name(acptr), host, HOSTLEN);
+  ircd_strncpy(cli_info(acptr), parv[parc-1], REALLEN);
+  cli_serv(acptr)->up = sptr;
+  cli_serv(acptr)->updown = add_dlink(&(cli_serv(sptr))->down, acptr);
+  /* Use cptr, because we do protocol 9 -> 10 translation
+     for numeric nicks ! */
+  SetServerYXX(cptr, acptr, parv[6]);
+  
+  /* Attach any necessary UWorld config items. */
+  attach_confs_byhost(cptr, host, CONF_UWORLD);
+  
+  if (*parv[7] == '+')
+    set_server_flags(acptr, parv[7] + 1);
+  
+  Count_newremoteserver(UserStats);
+  if (Protocol(acptr) < 10)
+    SetFlag(acptr, FLAG_TS8);
+  add_client_to_list(acptr);
+  hAddClient(acptr);
+  
+  update_server_route(acptr, cptr, sptr, linkcost, NULL);
   
   if (*parv[5] == 'J')
   {
@@ -876,14 +864,11 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       continue;
     if (0 == match(cli_name(&me), cli_name(acptr)))
       continue;
-    if(is_new_link)
-      sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s%s%s%s %u :%s",
+    sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s%s%s%s %u :%s",
                   cli_name(acptr), hop + 1, parv[4], parv[5],
                   NumServCap(acptr), IsHub(acptr) ? "h" : "",
                   IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
                   IsRouter(acptr) ? "r" : "", cli_linkcost(acptr), cli_info(acptr));
-    else if(announce_link)
-      sendcmdto_one(sptr, CMD_LINKCHANGE, bcptr, "%C %C %u", acptr, cli_serv(acptr)->up, cli_linkcost(acptr));
   }
   return 0;
 }

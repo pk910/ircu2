@@ -461,8 +461,8 @@ void sendcmdto_neighbours_butone(struct Client *from, const char *cmd,
 			   const char *pattern, ...)
 {
   struct VarData vd;
-  
-  vd.vd_format = pattern; /* set up the struct VarData for %v */
+
+   vd.vd_format = pattern; /* set up the struct VarData for %v */
 
   va_start(vd.vd_args, pattern);
   sendcmdto_neighbours_buttwo(from, cmd, tok, one, 0, "%v", &vd);

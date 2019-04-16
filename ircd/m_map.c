@@ -110,7 +110,7 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
   struct DLink *lp;
   char *p = prompt + prompt_length;
   int cnt, alp;
-  struct RouteLinkInfo *linkinfo;
+  struct RouteList *linkinfo;
   
   *p = '\0';
   if (prompt_length > 60)

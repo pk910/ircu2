@@ -27,8 +27,9 @@ struct Client;
 
 #define ROUTE_INDEX_ROLLOVER 4000000000
 
-
-/* broadcast & multicast routing info */
+/* broadcast & multicast routing info struct
+* list of all server numerics to forward messages to when originating from the server which references this RouteInfo 
+*/
 struct RouteInfo {
   unsigned int is_ptrdata    :  1; /**< does route_data need to be freed */
   unsigned int is_deprecated :  1; /**< is route deprecated (needs rebuild) */
@@ -38,20 +39,24 @@ struct RouteInfo {
   char        *route_data;
 };
 
-/* server link map - node struct */
-struct RouteLinkInfo {
-  unsigned int link_islocal  :  1;
-  unsigned int link_cost     : 31;
+/* route list node struct
+* node struct for a list of all neighbours I can see the server on (the server which references this list)
+*/
+struct RouteList {
+  unsigned int link_islocal  :  1; /**< is a local link (server directly connected to me) */
+  unsigned int link_cost     : 31; /**< total const to send to server via   */
   char link_client[2];
   char link_parent[2];
-  struct RouteLinkInfo *next;
+  struct RouteList *next;
 };
 
+/* macro for numnick compare with client */
 #define RouteLinkNumIs(num, cli) (num[0] == cli_yxx(cli)[0] && num[1] == cli_yxx(cli)[1])
+/* macro for numnick copy from client */
 #define RouteLinkNumSet(num, cli) (memcpy(num, cli_yxx(cli), 2))
 
 /* routing functions */
-extern int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost);
+extern int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment);
 extern void remove_uplink_routes(struct Client *uplink, const char *comment);
 extern void free_server_routes(struct Client *uplink);
 extern void impersonate_client(struct Client *client, struct Client *victim);

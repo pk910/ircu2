@@ -109,6 +109,7 @@ int a_kills_b_too(struct Client *a, struct Client *b)
 /** Handle a connection that has sent a valid PASS and SERVER.
  * @param cptr New peer server.
  * @param aconf Connect block for \a cptr.
+ * @param announce_link Send burst (0x1) or handshake (0x2)
  * @return Zero.
  */
 int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
@@ -122,7 +123,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
 
   inpath = cli_name(cptr);
 
-  if (IsUnknown(cptr) || (announce_link & 0x04)) {
+  if (IsUnknown(cptr) || (announce_link & 0x02)) {
     if (aconf->passwd[0])
       sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
     /*
@@ -175,32 +176,31 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
   sendto_opmask_butone(0, SNO_NETWORK, "Net junction: %s %s", cli_name(&me),
                        cli_name(cptr));
   SetJunction(cptr);
-  /*
-   * Old sendto_serv_but_one() call removed because we now
-   * need to send different names to different servers
-   * (domain name matching) Send new server to other servers.
-   */
-  for (i = 0; i <= HighestFd; i++)
-  {
-    if (!(acptr = LocalClientArray[i]) || !IsServer(acptr) ||
-        acptr == cptr || IsMe(acptr))
-      continue;
-    if (!match(cli_name(&me), cli_name(cptr)))
-      continue;
-    
-    if((announce_link & 0x01))
-      sendcmdto_one(&me, CMD_SERVER, acptr,
-        "%s 2 0 %Tu J%02u %s%s +%s%s%s%s %u :%s", cli_name(cptr),
-        cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
-        IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
-        IsIPv6(cptr) ? "6" : "", "r", cli_linkcost(cptr), cli_info(cptr));
-    else if((announce_link & 0x02))
-      sendcmdto_one(&me, CMD_LINKCHANGE, acptr, "%C %C %u", cptr, cli_serv(cptr)->up, cli_linkcost(cptr));
-  }
-
-  /* send burst messages only if server wasn't already linked with the network via another client */
-  SetBurst(cptr);
+  
   if((announce_link & 0x01)) {
+    /*
+     * Old sendto_serv_but_one() call removed because we now
+     * need to send different names to different servers
+     * (domain name matching) Send new server to other servers.
+     */
+    for (i = 0; i <= HighestFd; i++)
+    {
+      if (!(acptr = LocalClientArray[i]) || !IsServer(acptr) ||
+          acptr == cptr || IsMe(acptr))
+        continue;
+      if (!match(cli_name(&me), cli_name(cptr)))
+        continue;
+      
+      sendcmdto_one(&me, CMD_SERVER, acptr,
+          "%s 2 0 %Tu J%02u %s%s +%s%s%s%s %u :%s", cli_name(cptr),
+          cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
+          IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
+          IsIPv6(cptr) ? "6" : "", "r", cli_linkcost(cptr), cli_info(cptr));
+    }
+
+    /* send burst messages only if server wasn't already linked with the network via another client */
+    SetBurst(cptr);
+    
     /* Send these as early as possible so that glined users/juped servers can
      * be removed from the network while the remote server is still chewing
      * our burst.
@@ -208,7 +208,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
     gline_burst(cptr);
     jupe_burst(cptr);
   }
-
+  
   /*
    * Pass on my client information to the new server
    *

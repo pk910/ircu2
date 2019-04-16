@@ -34,8 +34,10 @@
 #include "numeric.h"
 #include "numnicks.h"
 #include "match.h"
+#include "msg.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 
@@ -100,6 +102,12 @@ int ms_squit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return 0;
   }
   
+  if(!MyConnect(acptr)) {
+    // just forward the squit
+    sendcmdto_one(sptr, CMD_SQUIT, cli_from(acptr), "%s 0 :%s", cli_name(acptr), comment);
+    return 0;
+  }
+  
   return exit_client(cptr, acptr, sptr, comment);
 }
 
@@ -155,6 +163,12 @@ int mo_squit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /* Disallow local opers to squit remote servers */
   if (IsLocOp(sptr) && !MyConnect(acptr))
     return send_reply(sptr, ERR_NOPRIVILEGES);
-
+  
+  if(IsUser(sptr) && !MyConnect(acptr)) {
+    // just forward the squit
+    sendcmdto_one(sptr, CMD_SQUIT, cli_from(acptr), "%s :%s", cli_name(acptr), comment);
+    return 0;
+  }
+  
   return exit_client(cptr, acptr, sptr, comment);
 }

@@ -42,6 +42,8 @@
 #include "numeric.h"
 #include "numnicks.h"
 #include "s_bsd.h"
+#include "s_debug.h"
+#include "s_misc.h"
 #include "send.h"
 #include "struct.h"
 #include "sys.h"
@@ -59,32 +61,46 @@ static int build_route_buflen;
 
 // internal function declarations
 static void update_server_parent(struct Client *server);
-static void update_downlink_hopcount_recursive(struct Client *downlink, unsigned int hopcount);
-static void deprecate_broadcast_routes();
-static void update_server_uplink(struct Client *server, struct Client *new_uplink);
-static void update_client_connection_recursive(struct Client *server, struct Client *uplink);
-static void remove_uplink_routes_recursive(struct Client *uplink, struct Client *client, const char *comment);
+static void update_server_parent_recursive(struct Client *downlink, unsigned int hopcount);
+static void update_server_uplink(struct Client *server);
+static void update_server_uplink_recursive(struct Client *server, struct Client *uplink);
+static void remove_uplink_routes_recursive(struct Client *uplink, struct Client *client, unsigned int linkcost, const char *comment);
 static void free_routeinfo(struct RouteInfo *routeinfo);
 static void build_route_recursive(struct Client *server, struct RouteInfo *netroute, int *routehint_ptr);
 static void announce_server_route(struct Client *client, struct Client *server, struct RouteInfo *routeinfo);
 
-/** Handle link announcement from uplink for server.
- * 
- * @param server The client which is announced in the announcement
- * @param uplink The client which sent the announcement to us
- * @param parent The parent server which is directly connected to the client
- * @param linkcost The cost to send data to server via uplink
- * @return 1 if the update changed something on the primary uplink (update should be propagated)
+/** Handle link announcement from uplink for and remember as route.
+ *
+ * Routes is a list of all paths to server from my point of view in the network.
+ *
+ * Each entry in the list represents a local client that can be used to reach server.
+ * The list is ordered by linkcost so the best route should always be the first.
+ *
+ * Unfortunately there are big problems when a locally connected server gets a better link
+ * via a remote uplink (think about PINGs and other stuff which is handled per connection) so
+ * we ensure that entries via local uplinks are always at the top even if there is a better
+ * route available via another server.
+ *
+ * @param server The client which is got announced
+ * @param uplink The local client we're receiving the announcement from
+ * @param parent The client which is announced to be directly connected to `server`
+ *               or null if link to `server` via `uplink` is denounced
+ * @param linkcost The cost to send to `server` via `uplink`
+ * @param comment The reason for the denouncement (NULL if announcement)
+ * @return 1 if the update changed something and forwarded the update to our neighbours
+           2 if the update changed something and no more uplink route present for server
  *         0 otherwise
  */
-int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost) {
-  struct RouteLinkInfo *cnode, *link_node = NULL, *prev_node = NULL, *link_prev = NULL, *cost_prev = NULL;
+int update_server_route(struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment) {
+  struct RouteList *cnode, *link_node = NULL, *prev_node = NULL, *link_prev = NULL, *cost_prev = NULL;
   //struct Client *cfrom;
   int is_local_route = (server == uplink);  // is the updated route a local route?
-  int is_lowest_cost = 0; // is the updated route the best one?
+  int is_lowest_cost = 0; // is this route the best one?
   int new_lowest_link = 0; // has the lowest link to the server changed?
-  int do_reinsert_route = 0; // need to remove (if existing) and reinsert (if not a de-announcement) route to routes list (ensuring list order)
+  int do_reinsert_route = 0; // need to remove (if existing) and reinsert (if not denounced) route to routes list (ensuring list order)
   int do_reparent_server = 0; // need to reparent the server in the local server link tree
+  int route_count = 0;
+  int has_forwarded = 0; // have we forwarded this update our neighbours?
   assert(0 != cli_serv(server));
   assert(0 != cli_local(uplink) || 0 == parent);
   
@@ -98,6 +114,7 @@ int update_server_route(struct Client *server, struct Client *uplink, struct Cli
   
   // search existing link and determinate new position in sorted list
   for(cnode = cli_serv(server)->routes; cnode; cnode = cnode->next) {
+    route_count++;
     
     if(!(is_lowest_cost || cost_prev || !parent) && (
       cnode->link_cost > linkcost
@@ -114,66 +131,80 @@ int update_server_route(struct Client *server, struct Client *uplink, struct Cli
       link_prev = prev_node;
       
       if(!parent)
-        // de-announcement - we just had to find the node in the list, no need to update
-        break;
-      
-      // check if route position is still ok, or if we need to reorder the list
-      if(cnode->link_cost != linkcost) {
-        cnode->link_cost = linkcost; // cost changed - now check if list position is still acceptable
+        // denounced - we just had to find the route entry in the list, no need to update
+        continue;
         
+      // update our information about the route
+      if(cnode->link_cost != linkcost) {
+        cnode->link_cost = linkcost; // cost changed
+        
+        // ensure propagation if primary link cost changed
+        if(!prev_node)
+          new_lowest_link = 1;
+        
+        // check if route position in ordered list is still ok, or if we need to reorder
         if(linkcost < cnode->link_cost && prev_node && 
           (prev_node->link_cost > linkcost && (!prev_node->link_islocal || is_local_route))
         ) // linkcost decreased and previous node has higher cost now, so we need to reorder
           do_reinsert_route = 1;
-        
-        else if(linkcost > cnode->link_cost && cnode->next && (cnode->next->link_cost < linkcost && (!is_local_route || cnode->next->link_islocal)))
-          // linkcost increased and next node has lower cost, so we need to reorder
+        else if(linkcost > cnode->link_cost && cnode->next && 
+          (cnode->next->link_cost < linkcost && (!is_local_route || cnode->next->link_islocal))
+        ) // linkcost increased and next node has lower cost, so we need to reorder
           do_reinsert_route = 1;
       }
       
-      // check if parent server changed
+      // check if parent of server in route changed
       if(!RouteLinkNumIs(cnode->link_parent, parent)) {
-        // set new parent in route
+        // set new parent numnick in route
         RouteLinkNumSet(cnode->link_parent, parent);
         
-        if(!prev_node) // this is the primary link, so we need to reparent the server in the local link tree
+        // if this is the primary uplink we need to reparent the server in the local server tree
+        if(!prev_node)
           do_reparent_server = 1;
       }
-      
-      if(!do_reinsert_route && !do_reparent_server)
-        return 0; // no structural update - just return here
     }
     else
       prev_node = cnode;
   }
   
-  if(!cnode) {
-    if(!parent) // de-announcement for a link we don't even know about
-      return 0;
-    
-    // create new link node
-    cnode = (struct RouteLinkInfo*) MyCalloc(1, sizeof(*cnode));
-    cnode->link_islocal = is_local_route ? 1 : 0;
-    cnode->link_cost = linkcost;
-    RouteLinkNumSet(cnode->link_client, uplink);
-    RouteLinkNumSet(cnode->link_parent, parent);
+  if(!link_node) {
+    if(!parent) {
+      // link is denounced but we didn't even know the link...
+      // we must have missed a advertisement or there is something else terribly wrong
+      Debug((DEBUG_ERROR, "Received denounce to %C from %C, but I don't know about this route.", uplink, server));
+      do_reinsert_route = 0;
+    }
+    else {
+      // create new entry in the routes list
+      link_node = (struct RouteList*) MyCalloc(1, sizeof(*link_node));
+      link_node->link_islocal = is_local_route ? 1 : 0;
+      link_node->link_cost = linkcost;
+      RouteLinkNumSet(link_node->link_client, uplink);
+      RouteLinkNumSet(link_node->link_parent, parent);
+      do_reinsert_route = 1;
+    }
   }
   else if(do_reinsert_route) {
-    // remove link node from list
+    // remove the entry from the list (position invalid or denounced)
     if(link_prev)
-      link_prev->next = cnode->next;
+      link_prev->next = link_node->next;
     else {
       new_lowest_link = 1;
-      cli_serv(server)->routes = cnode->next;
+      cli_serv(server)->routes = link_node->next;
+    }
+    route_count--;
+    
+    if(!parent) {
+      // link denouncement - free list entry and do not add it to the list anymore
+      MyFree(link_node);
+      link_node = NULL;
+      do_reinsert_route = 0;
     }
   }
   
-  if(!parent) {
-    // de-announcement of a link - free route node
-    MyFree(cnode);
-    cnode = NULL;
-  }
-  else {
+  if(do_reinsert_route) {
+    // insert the entry at the right position into the list
+    
     if(!cost_prev && !is_lowest_cost) {
       if(prev_node && (!is_local_route || prev_node->link_islocal))
         // the worst route for this server
@@ -182,90 +213,58 @@ int update_server_route(struct Client *server, struct Client *uplink, struct Cli
         // the first route for this server
         is_lowest_cost = 1;
     }
-    // insert link node to list (sorted by link cost)
-    if(is_lowest_cost) {
+    // insert link node to list
+    route_count++;
+    if(is_lowest_cost) { // as first
       new_lowest_link = 1;
-      cnode->next = cli_serv(server)->routes;
-      cli_serv(server)->routes = cnode;
+      link_node->next = cli_serv(server)->routes;
+      cli_serv(server)->routes = link_node;
     }
-    else {
-      cnode->next = cost_prev->next;
-      cost_prev->next = cnode;
+    else { // after cost_prev entry
+      link_node->next = cost_prev->next;
+      cost_prev->next = link_node;
     }
   }
   
-  if((cnode = cli_serv(server)->routes)) {
+  if(route_count > 1)
+    SetRoutingEnabled(server);
+  else
+    ClearRoutingEnabled(server);
+  
+  // check if there is still a route present
+  if(route_count) {
     // update position in local server tree if needed
-    if(do_reparent_server || new_lowest_link)
+    if(do_reparent_server || new_lowest_link) {
+      cli_linkcost(server) = cli_serv(server)->routes->link_cost;
       update_server_parent(server);
+    }
     
+    // update primary uplink if needed
     if(new_lowest_link) {
-      // update primary uplink if needed
-      if(RouteLinkNumIs(cnode->link_client, uplink) || (uplink = FindNServer(cnode->link_client)))
-        update_server_uplink(server, uplink);
+      update_server_uplink(server);
       
-      // set new link parameters
-      cli_linkcost(server) = cnode->link_cost;
+      // forward to neighbours
       
-      // mark broadcast routes as deprecated
-      deprecate_broadcast_routes();
-      
-      return 1;
+      if(parent && route_count > 1) {
+        sendcmdto_neighbours_butone(&me, CMD_LINKCHANGE, uplink, "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
+        has_forwarded = 1;
+      }
+      else if(!parent && route_count <= 1) {
+        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, uplink, cli_from(server), "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
+        sendcmdto_prio_one(&me, CMD_LINKCHANGE, cli_from(server), "%C %C - :%s", server, uplink, comment);
+        has_forwarded = 1;
+      }
     }
   }
-  return 0;
-}
-
-void remove_uplink_routes(struct Client *uplink, const char *comment) {
-  struct DLink *link, *nextlink;
+  else if(!parent) {
+    // no more neighbours but uplink must assume there is still one (would have sent a SQUIT if not)
+    // probably a timing issue, so we exit the server ourself to ensure this is properly propagated
+    if(!linkcost)
+      exit_client(uplink, server, uplink, comment);
+    has_forwarded = 2;
+  }
   
-  remove_uplink_routes_recursive(&me, uplink, comment);
-  
-  if(update_server_route(uplink, uplink, NULL, 0)) {
-    sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, uplink, cli_from(uplink), "%C %C %u", uplink, cli_serv(uplink)->up, cli_linkcost(uplink));
-    sendcmdto_one(&me, CMD_LINKCHANGE, cli_from(uplink), "%C %C - :%s", uplink, cli_serv(uplink)->up, comment);
-  }
-}
-
-static void remove_uplink_routes_recursive(struct Client *uplink, struct Client *client, const char *comment) {
-  struct DLink *link, *nextlink;
-  struct Client *lncli;
-  
-  // loop through all servers and remove uplink route if set
-  for (link = cli_serv(client)->down; link; link = nextlink) {
-    lncli = link->value.cptr;
-    nextlink = link->next;
-    
-    // recursively remove from downlinks first
-    remove_uplink_routes_recursive(uplink, lncli, comment);
-    
-    /* remove uplink route (parent = NULL)
-     * this may change the position of lncli in the server link tree,
-     * so it could be that it is no longer a downlink of `uplink`
-     */
-    if(update_server_route(lncli, uplink, NULL, 0)) {
-      sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, uplink, cli_from(lncli), "%C %C %u", lncli, cli_serv(lncli)->up, cli_linkcost(lncli));
-      sendcmdto_one(&me, CMD_LINKCHANGE, cli_from(lncli), "%C %C - :%s", lncli, cli_serv(lncli)->up, comment);
-    }
-  }
-}
-
-void free_server_routes(struct Client *uplink) {
-  struct RouteLinkInfo *link, *next_link;
-  for(link = cli_serv(uplink)->routes; link; link = next_link) {
-    next_link = link->next;
-    MyFree(link);
-  }
-  cli_serv(uplink)->routes = NULL;
-  
-  if(cli_serv(uplink)->fwd_route) {
-    free_routeinfo(cli_serv(uplink)->fwd_route);
-    cli_serv(uplink)->fwd_route = NULL;
-  }
-  if(cli_serv(uplink)->own_route) {
-    free_routeinfo(cli_serv(uplink)->own_route);
-    cli_serv(uplink)->own_route = NULL;
-  }
+  return has_forwarded;
 }
 
 static void update_server_parent(struct Client *server) {
@@ -282,33 +281,66 @@ static void update_server_parent(struct Client *server) {
   cli_serv(server)->updown = add_dlink(&(cli_serv(new_parent))->down, server);
   cli_serv(server)->up = new_parent;
   
-  update_downlink_hopcount_recursive(server, cli_hopcount(new_parent) + 1);
+  update_server_parent_recursive(server, cli_hopcount(new_parent) + 1);
 }
 
-static void update_downlink_hopcount_recursive(struct Client *downlink, unsigned int hopcount) {
+static void update_server_parent_recursive(struct Client *server, unsigned int hopcount) {
   struct DLink *link;
   
   // update client hopcount
-  cli_hopcount(downlink) = hopcount;
+  cli_hopcount(server) = hopcount;
   
-  // mark own broadcast route as deprecated
-  if(cli_serv(downlink)->own_route)
-    cli_serv(downlink)->own_route->is_deprecated = 1;
+  // mark own broadcast route for this server as deprecated
+  if(cli_serv(server)->own_route)
+   cli_serv(server)->own_route->is_deprecated = 1;
   
   // loop through all downlinks
-  for (link = cli_serv(downlink)->down; link; link = link->next)
-    update_downlink_hopcount_recursive(link->value.cptr, hopcount + 1);
+  for (link = cli_serv(server)->down; link; link = link->next)
+    update_server_parent_recursive(link->value.cptr, hopcount + 1);
 }
 
-static void deprecate_broadcast_routes() {
+static void update_server_uplink(struct Client *server) {
   struct DLink *link;
   struct Client *lncli;
+  struct Client *new_uplink;
+  struct Client **acptrp;
+  int i;
   
-  // loop through all local downlinks
-  for (link = cli_serv(&me)->down; link; link = link->next) {
-    lncli = link->value.cptr;
-    if(cli_serv(lncli)->own_route)
-      cli_serv(lncli)->own_route->is_deprecated = 1;
+  new_uplink = FindNServer(cli_serv(server)->routes->link_client);
+  if(!new_uplink || cli_connect(new_uplink) == cli_connect(server))
+    return;
+
+  if(IsServer(server) && cli_local(server)) {
+    /* Lost direct connection to the server. 
+      We want to keep the Client alive as it is still reachable via another link,
+      therefore we have to delink it from the old dying connection struct here.
+    */
+    close_connection(server);
+    cli_from(server) = 0;
+    ClrFlag(server, FLAG_DEADSOCKET);
+  }
+  
+  /* Set uplink connection on server and all associated clients */
+  update_server_uplink_recursive(server, new_uplink);
+}
+
+static void update_server_uplink_recursive(struct Client *server, struct Client *uplink) {
+  struct DLink *link;
+  struct Client **acptrp;
+  int i;
+  
+  // update connection of server
+  cli_connect(server) = cli_connect(uplink);
+  
+  // loop through all downlinks
+  for (link = cli_serv(server)->down; link; link = link->next) {
+    update_server_uplink_recursive(link->value.cptr, uplink);
+  }
+  // loop through all clients of server
+  acptrp = cli_serv(server)->client_list;
+  for (i = 0; i <= cli_serv(server)->nn_mask; ++acptrp, ++i) {
+    if (*acptrp)
+      cli_connect(*acptrp) = cli_connect(uplink);
   }
 }
 
@@ -323,7 +355,7 @@ void impersonate_client(struct Client *client, struct Client *victim) {
   
   // update cli_connect references
   LocalClientArray[cli_fd(client)] = victim;
-  update_client_connection_recursive(victim, client);
+  update_server_uplink_recursive(victim, client);
   cli_from(victim) = victim;
   cli_status(client) = STAT_UNKNOWN;
   
@@ -334,44 +366,68 @@ void impersonate_client(struct Client *client, struct Client *victim) {
   SetFlag(client, FLAG_IMPERSONATING);
 }
 
-static void update_server_uplink(struct Client *server, struct Client *new_uplink) {
-  struct DLink *link;
+/** Remove routes that used uplink from all servers
+ * @param uplink The uplink that is removed
+ * @param comment The remove reason
+ * @return 1 if the update changed something on the primary uplink (update should be propagated)
+ *         0 otherwise
+ */
+void remove_uplink_routes(struct Client *uplink, const char *comment) {
+  struct DLink *link, *nextlink;
   struct Client *lncli;
-  struct Client **acptrp;
-  int i;
-  if(cli_connect(new_uplink) == cli_connect(server))
-    return;
-
-  if(IsServer(server) && cli_local(server)) {
-    /* Lost direct connection to the server. 
-      We want to keep the Client alive as it is still reachable via another link,
-      therefore we have to free the Connection struct ourselve here. */
-    close_connection(server);
-    cli_from(server) = 0;
-    ClrFlag(server, FLAG_DEADSOCKET);
-  }
   
-  /* Set uplink connection */
-  update_client_connection_recursive(server, new_uplink);
+  // denounce primary routes via uplink (but do not exit any client)
+  remove_uplink_routes_recursive(uplink, uplink, 1, comment);
+  
+  // denounce non-primary routes via uplink
+  for (link = cli_serv(&me)->down; link; link = nextlink) {
+    lncli = link->value.cptr;
+    nextlink = link->next;
+    if(lncli == uplink)
+      continue;
+    remove_uplink_routes_recursive(uplink, lncli, 0, comment);
+  }
 }
 
-static void update_client_connection_recursive(struct Client *server, struct Client *uplink) {
-  struct DLink *link;
-  struct Client **acptrp;
-  int i;
+static void remove_uplink_routes_recursive(struct Client *uplink, struct Client *client, unsigned int linkcost, const char *comment) {
+  struct DLink *link, *nextlink;
+  struct Client *lncli;
   
-  // update connection of server
-  cli_connect(server) = cli_connect(uplink);
-  
-  // loop through all downlinks
-  for (link = cli_serv(server)->down; link; link = link->next) {
-    update_client_connection_recursive(link->value.cptr, uplink);
+  // loop through all downlinks and remove uplink route if set
+  for (link = cli_serv(client)->down; link; link = nextlink) {
+    lncli = link->value.cptr;
+    nextlink = link->next;
+    
+    // recursively remove from downlinks first
+    remove_uplink_routes_recursive(uplink, lncli, linkcost, comment);
   }
-  // loop through all clients of server
-  acptrp = cli_serv(server)->client_list;
-  for (i = 0; i <= cli_serv(server)->nn_mask; ++acptrp, ++i) {
-    if (*acptrp)
-      cli_connect(*acptrp) = cli_connect(uplink);
+  
+  /* remove uplink route (parent = NULL)
+   * this may change the position of lncli in the server link tree,
+   * so it could be that it is no longer a downlink of `uplink`
+   */
+  update_server_route(client, uplink, NULL, linkcost, comment);
+}
+
+/** Clear all routing related structs and clear references in server struct
+ * @param uplink The client to clear
+ * @return
+ */
+void free_server_routes(struct Client *uplink) {
+  struct RouteList *link, *next_link;
+  for(link = cli_serv(uplink)->routes; link; link = next_link) {
+    next_link = link->next;
+    MyFree(link);
+  }
+  cli_serv(uplink)->routes = NULL;
+  
+  if(cli_serv(uplink)->fwd_route) {
+    free_routeinfo(cli_serv(uplink)->fwd_route);
+    cli_serv(uplink)->fwd_route = NULL;
+  }
+  if(cli_serv(uplink)->own_route) {
+    free_routeinfo(cli_serv(uplink)->own_route);
+    cli_serv(uplink)->own_route = NULL;
   }
 }
 
@@ -401,6 +457,8 @@ struct RouteInfo *build_broadcast_route(struct Client *server) {
   
   return cli_serv(server)->own_route = routeinfo;
 }
+
+
 
 struct RouteInfo *build_forward_route(struct Client *uplink, struct RouteInfo *netroute, int *routehint, struct RouteInfo *outbuf) {
   struct RouteInfo *routeinfo;
@@ -441,6 +499,7 @@ static void build_route_recursive(struct Client *server, struct RouteInfo *netro
     lncli = link->value.cptr;
     
     if(netroute) {
+      // check if downlink is part of the route - do not forward if not
       rtfound = 0;
       for(rtidx = routehint; rtidx < routestrlen; rtidx += 2) {
         if(RouteLinkNumIs((netroute->route_data + rtidx), lncli)) {
@@ -489,6 +548,8 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
       lncli = link->value.cptr;
       if(lncli == uplink)
         continue;
+      if(!IsRoutingEnabled(lncli))
+        continue;
       
       rtfound = 0;
       if(rthint > routelen)
@@ -535,7 +596,8 @@ void update_server_netroute(struct Client *server, struct Client *uplink, struct
 int check_forward_to_server(struct Client *server, struct Client *uplink) {
   if(IsUser(server))
     server = cli_user(server)->server;
-  
+  if(!IsRoutingEnabled(uplink))
+    return 1;
   if(!cli_serv(server)->fwd_route)
     return 1;
   if(cli_serv(server)->fwd_route->route_len == 0)
@@ -555,7 +617,7 @@ void ensure_route_announced(struct Client *server) {
   struct RouteInfo *routeinfo;
   
   assert(0 != server);
-  if(!cli_serv(server))
+  if(!cli_serv(server) || !IsRoutingEnabled(server))
     return;
   
   if(!(routeinfo = cli_serv(server)->own_route) || cli_serv(server)->own_route->is_deprecated)
