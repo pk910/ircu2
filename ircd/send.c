@@ -503,7 +503,8 @@ void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
  * marker hits zero.
  * @param[in,out] one Client to mark with new sentalong marker (if any).
  */
-int bump_sentalong(struct Client *one)
+static void
+bump_sentalong(struct Client *one)
 {
   if (!++sentalong_marker)
   {
@@ -515,7 +516,6 @@ int bump_sentalong(struct Client *one)
   }
   if (one)
     cli_sentalong(one) = sentalong_marker;
-  return sentalong_marker;
 }
 
 /** Send a (prefixed) command to all channels that \a from is on.
