@@ -196,6 +196,7 @@ struct Connection
   int                 con_error;     /**< last socket level error for client */
   int                 con_sentalong; /**< sentalong marker for connection */
   unsigned int        con_snomask;   /**< mask for server messages */
+  unsigned int        con_linkcost;  /**< cost to send data to via this connection */
   time_t              con_nextnick;  /**< Next time a nick change is allowed */
   time_t              con_nexttarget;/**< Next time a target change is allowed */
   time_t              con_lasttime;  /**< Last time data read from socket */
@@ -410,6 +411,8 @@ struct Client {
 #define con_sentalong(con)      ((con)->con_sentalong)
 /** Get server notice mask for connection. */
 #define con_snomask(con)	((con)->con_snomask)
+/** Get linkcost for connection. */
+#define con_linkcost(con)	((con)->con_linkcost)
 /** Get next nick change time for connection. */
 #define con_nextnick(con)	((con)->con_nextnick)
 /** Get next new target time for connection. */

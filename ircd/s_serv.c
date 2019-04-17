@@ -113,7 +113,8 @@ int a_kills_b_too(struct Client *a, struct Client *b)
  * @param announce_link Send burst (0x1) or handshake (0x2)
  * @return Zero.
  */
-int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
+int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link, 
+                 struct LinkAnnounceDst **lnabuf)
 {
   struct Client* acptr = 0;
   const char*    inpath;
@@ -225,6 +226,9 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
    * a race condition, not the normal way of operation...
    */
 
+  struct LinkAnnounceDst *lnabufmem = NULL;
+  if(!lnabuf)
+    lnabuf = &lnabufmem;
   for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
     /* acptr->from == acptr for acptr == cptr */
     if (cli_from(acptr) == cptr)
@@ -241,11 +245,10 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
       
-      if(!(announce_link & 0x01) && (route = cli_serv(acptr)->routes))
-        sendcmdto_one(&me, CMD_LINKCHANGE, cptr, 
-          "%.2s %.2s %u", cli_yxx(acptr), route->link_parent, 
-          cli_linkcost(acptr));
-      else
+      if(!(announce_link & 0x01) && (route = cli_serv(acptr)->routes)) {
+        send_announce_to_one_buf(lnabuf, cptr, cli_yxx(acptr), 
+          route->link_parent, cli_linkcost(acptr));
+      } else
         sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
           "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
           cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
@@ -255,6 +258,8 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
           cli_linkcost(acptr), cli_info(acptr));
     }
   }
+  if(lnabufmem)
+    flush_link_announcements(lnabufmem, "");
 
   if((announce_link & 0x01)) {
     for (acptr = &me; acptr; acptr = cli_prev(acptr))

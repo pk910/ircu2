@@ -691,6 +691,8 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   
   /* Attach any necessary UWorld config items. */
   attach_confs_byhost(acptr, host, CONF_UWORLD);
+  if(!(con_linkcost(cli_connect(acptr)) = aconf->linkcost))
+    con_linkcost(cli_connect(acptr)) = 10;
   
   recv_time = TStime();
   check_start_timestamp(acptr, timestamp, start_timestamp, recv_time);
@@ -699,13 +701,15 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     linkcost = atoi(parv[8]);
   else
     linkcost = 0;
-  
-  linkcost += aconf->linkcost;
+  linkcost += con_linkcost(cli_connect(acptr));
   if(!linkcost)
     linkcost = 1;
   
-  update_server_route(acptr, acptr, acptr, &me, linkcost, "", NULL);
-  ret = server_estab(acptr, aconf, announce_link);
+  struct LinkAnnounceDst *lnabuf = NULL;
+  update_server_route(&lnabuf, acptr, acptr, acptr, &me, linkcost);
+  ret = server_estab(acptr, aconf, announce_link, &lnabuf);
+  if(lnabuf)
+    flush_link_announcements(lnabuf, "");
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
       labs(cli_serv(acptr)->timestamp - recv_time) > 30) {
@@ -751,6 +755,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   time_t           start_timestamp;
   time_t           timestamp;
   unsigned int     linkcost;
+  struct LinkAnnounceDst *lnabuf = NULL;
 
   if (parc < 8)
   {
@@ -788,14 +793,11 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return exit_client_msg(cptr, cptr, &me,
                            "No server info specified for %s", host);
 
-  if (parc > 8) {
-    if((linkcost = atoi(parv[8])) < hop)
-      linkcost = hop;
-  }
+  if (parc > 8)
+    linkcost = atoi(parv[8]);
   else
-    linkcost = hop;
-
-  linkcost += cli_linkcost(cptr);
+    linkcost = 0;
+  linkcost += con_linkcost(cli_connect(cptr));
   
   char numbuf[3];
   numbuf[0] = parv[6][0];
@@ -806,7 +808,9 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     /* we already know the server, so do not continue processing here
      * use the provided information as a link change advertisement
      */
-    update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf, NULL);
+    update_server_route(&lnabuf, cptr, acptr, cptr, sptr, linkcost);
+    if(lnabuf)
+      flush_link_announcements(lnabuf, numbuf);
     return 0;
   }
 
@@ -845,7 +849,9 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   add_client_to_list(acptr);
   hAddClient(acptr);
   
-  update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf, NULL);
+  update_server_route(&lnabuf, cptr, acptr, cptr, sptr, linkcost);
+  if(lnabuf)
+    flush_link_announcements(lnabuf, numbuf);
   
   if (*parv[5] == 'J')
   {

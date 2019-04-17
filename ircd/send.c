@@ -445,55 +445,6 @@ void sendcmdto_serv_butone(struct Client *from, const char *cmd,
   msgq_clean(mb);
 }
 
-
-/**
- * Send a (prefixed) command to all neighbours but one.
- * @param[in] from Client sending the command.
- * @param[in] cmd Long name of command (ignored).
- * @param[in] tok Short name of command.
- * @param[in] one Client direction to skip (or NULL).
- * @param[in] pattern Format string for command arguments.
- */
-void sendcmdto_neighbours_butone(struct Client *from, const char *cmd,
-			   const char *tok, struct Client *one,
-			   const char *pattern, ...)
-{
-  struct VarData vd;
-
-   vd.vd_format = pattern; /* set up the struct VarData for %v */
-
-  va_start(vd.vd_args, pattern);
-  sendcmdto_neighbours_buttwo(from, cmd, tok, one, 0, "%v", &vd);
-  va_end(vd.vd_args);
-}
-
-void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
-			   const char *tok, struct Client *one, struct Client *two,
-			   const char *pattern, ...)
-{
-  struct VarData vd;
-  struct MsgBuf *mb;
-  struct DLink *lp;
-
-  vd.vd_format = pattern; /* set up the struct VarData for %v */
-  va_start(vd.vd_args, pattern);
-
-  /* use token */
-  mb = msgq_make(&me, "%C %s %v", from, tok, &vd);
-  va_end(vd.vd_args);
-
-  /* send it to our downlinks */
-  for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
-    if (one && lp->value.cptr == one)
-      continue;
-    if (two && lp->value.cptr == two)
-      continue;
-    send_buffer(lp->value.cptr, mb, 0);
-  }
-
-  msgq_clean(mb);
-}
-
 /** Safely increment the sentalong marker.
  * This increments the sentalong marker.  Since new connections will
  * have con_sentalong() == 0, and to avoid confusion when the counter

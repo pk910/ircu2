@@ -55,16 +55,6 @@ extern void sendcmdto_serv_butone(struct Client *from, const char *cmd,
 				  const char *tok, struct Client *one,
 				  const char *pattern, ...);
 
-/* Send command to all neighbour routers except one */
-extern void sendcmdto_neighbours_butone(struct Client *from, const char *cmd,
-			   const char *tok, struct Client *one,
-			   const char *pattern, ...);
-
-/* Send command to all neighbour routers except one and two */
-extern void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
-			   const char *tok, struct Client *one, struct Client *two,
-			   const char *pattern, ...);
-
 /* Send command to all channels user is on */
 extern void sendcmdto_common_channels_butone(struct Client *from,
 					     const char *cmd,

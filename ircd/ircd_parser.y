@@ -496,7 +496,7 @@ connectblock: CONNECT
     */
    aconf->maximum = (hub_limit != NULL && maxlinks == 0) ? 65535 : maxlinks;
    aconf->hub_limit = hub_limit;
-   aconf->linkcost = linkcost ? linkcost : 1;
+   aconf->linkcost = linkcost;
    aconf->flags = flags;
    lookup_confhost(aconf);
  }

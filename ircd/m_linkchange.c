@@ -99,55 +99,65 @@
  *
  * parv[0] = sender prefix
  * parv[1] = target server
- * parv[2] = parent uplink of server
- * parv[3] = link cost or '-'
- * parv[4] = numeric path
- * parv[parc-1] = comment if link cost = '-'
+ * parv[2] = link announcement 1
+ * parv[parc-2] = link announcement n
+ * parv[parc-1] = numeric path
  */
 int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if(parc < 4)
+  if(parc < 3)
     return need_more_params(sptr, "LINKCHANGE");
   
+  struct LinkAnnounceDst *lnabuf = NULL;
   struct Client* acptr;
-  if(!(acptr = FindNServer(parv[1])))
-    return 0;
-  if(acptr == &me)
-    return 0;
-  
   struct Client* parent;
-  if(!(parent = FindNServer(parv[2])))
-    return send_reply(sptr, ERR_NOSUCHNICK, parv[2]);
-  
   int i;
   unsigned int linkcost;
-  const char *numpath;
-  const char *comment;
+  char *numpath;
+  char *announce, tmpch;
   
-  if(parc > 4) {
-    numpath = parv[4];
-    for(i = 0; numpath[i]; i+=2) {
-      if(RouteLinkNumIs((numpath + i), &me))
-        return 0; // ignore if i have already touched it before
+  numpath = parv[parc-1];
+  for(i = 0; numpath[i]; i+=2) {
+    if(RouteLinkNumIs((numpath + i), &me))
+      return 0; // ignore if i have already touched it before
+  }
+  
+  for(i = 1; i < parc-1; i++) {
+    announce = parv[i];
+    if(strlen(announce) < 5)
+      continue;
+    
+    tmpch = announce[2];
+    announce[2] = '\0';
+    acptr = FindNServer(announce);
+    announce[2] = tmpch;
+    announce += 2;
+    if(!acptr)
+      continue;
+    if(acptr == &me)
+      continue;
+    
+    tmpch = announce[2];
+    announce[2] = '\0';
+    parent = FindNServer(announce);
+    announce[2] = tmpch;
+    announce += 2;
+    if(!parent)
+      continue;
+    
+    if(*announce == '0')
+      // link de-announced
+      linkcost = 0;
+    else {
+      linkcost = atoi(announce);
+      linkcost += cli_linkcost(cptr);
     }
-  }
-  else
-    numpath = NULL;
   
-  if(*parv[3] == '-') {
-    // link de-announced
-    linkcost = 0;
-    if(parc > 5)
-      comment = parv[5];
-    else
-      comment = "lost uplink";
-  }
-  else {
-    linkcost = atoi(parv[3]);
-    linkcost += cli_linkcost(cptr);
-    comment = "";
+    update_server_route(&lnabuf, cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost);
   }
   
-  update_server_route(cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost, numpath, comment);
+  if(lnabuf)
+    flush_link_announcements(lnabuf, numpath);
+  
   return 0;
 }
