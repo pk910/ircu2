@@ -57,7 +57,7 @@ struct RouteList {
 #define RouteLinkNumSet(num, cli) (memcpy(num, cli_yxx(cli), 2))
 
 /* routing functions */
-extern int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment);
+extern int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *numpath, const char *comment);
 extern void remove_uplink_routes(struct Client *uplink, const char *comment);
 extern void free_server_routes(struct Client *uplink);
 extern void impersonate_client(struct Client *client, struct Client *victim);

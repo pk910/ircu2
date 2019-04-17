@@ -101,6 +101,7 @@
  * parv[1] = target server
  * parv[2] = parent uplink of server
  * parv[3] = link cost or '-'
+ * parv[4] = numeric path
  * parv[parc-1] = comment if link cost = '-'
  */
 int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
@@ -111,27 +112,42 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
   struct Client* acptr;
   if(!(acptr = FindNServer(parv[1])))
     return 0;
+  if(acptr == &me)
+    return 0;
   
   struct Client* parent;
   if(!(parent = FindNServer(parv[2])))
     return send_reply(sptr, ERR_NOSUCHNICK, parv[2]);
   
+  int i;
   unsigned int linkcost;
+  const char *numpath;
   const char *comment;
+  
+  if(parc > 4) {
+    numpath = parv[4];
+    for(i = 0; numpath[i]; i+=2) {
+      if(RouteLinkNumIs((numpath + i), &me))
+        return 0; // ignore if i have already touched it before
+    }
+  }
+  else
+    numpath = NULL;
+  
   if(*parv[3] == '-') {
     // link de-announced
     linkcost = 0;
-    if(parc > 4)
-      comment = parv[4];
+    if(parc > 5)
+      comment = parv[5];
     else
       comment = "lost uplink";
   }
   else {
     linkcost = atoi(parv[3]);
     linkcost += cli_linkcost(cptr);
-    comment = "routing failed";
+    comment = "";
   }
   
-  update_server_route(cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost, comment);
+  update_server_route(cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost, numpath, comment);
   return 0;
 }

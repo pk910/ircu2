@@ -484,9 +484,9 @@ void sendcmdto_neighbours_buttwo(struct Client *from, const char *cmd,
 
   /* send it to our downlinks */
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
-    if (one && lp->value.cptr == cli_from(one))
+    if (one && lp->value.cptr == one)
       continue;
-    if (two && lp->value.cptr == cli_from(two))
+    if (two && lp->value.cptr == two)
       continue;
     send_buffer(lp->value.cptr, mb, 0);
   }

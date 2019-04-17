@@ -88,13 +88,14 @@ static void announce_server_route(struct Client *client, struct Client *server, 
  * @param parent The client which is announced to be directly connected to `server`
  *               or null if link to `server` via `uplink` is denounced
  * @param linkcost The cost to send to `server` via `uplink`
- * @param comment The reason for the denouncement (NULL if announcement)
+ * @param comment The reason for the denouncement or numeric path if announcement
  * @return 1 if the update changed something and forwarded the update to our neighbours
            2 if the update changed something and no more uplink route present for server
  *         0 otherwise
  */
-int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *comment) {
+int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *numpath, const char *comment) {
   struct RouteList *cnode, *link_node = NULL, *prev_node = NULL, *link_prev = NULL, *cost_prev = NULL;
+  struct Client *acptr;
   int is_local_route = (server == uplink);  // is the updated route a local route?
   int is_lowest_cost = 0; // is this route the best one?
   int new_lowest_link = 0; // has the lowest link to the server changed?
@@ -102,6 +103,7 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
   int do_reparent_server = 0; // need to reparent the server in the local server link tree
   int route_count = 0;
   int forward_advertisement = 0; // do we have forwarded this update to our neighbours?
+  int forward_loopadvert = 0; // do we have forwarded this loop route to our neighbours?
   assert(0 != cli_serv(server));
   assert(0 != cli_local(uplink) || 0 == parent);
   
@@ -109,6 +111,10 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
     is_lowest_cost = 1;
   if(!parent)
     do_reinsert_route = 1;
+  if(!numpath)
+    numpath = "";
+  if(!comment)
+    comment = "";
   
   //if(!cli_serv(server)->routes || !(cfrom = FindNServer(cli_serv(server)->routes->link_client)))
   //  cfrom = cli_from(server);
@@ -187,11 +193,15 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
   }
   else if(do_reinsert_route) {
     // remove the entry from the list (position invalid or denounced)
-    if(link_prev)
+    if(link_prev) {
       link_prev->next = link_node->next;
+      if(link_prev == cli_serv(server)->routes)
+        forward_loopadvert = 1;
+    }
     else {
       new_lowest_link = 1;
-      cli_serv(server)->routes = link_node->next;
+      if(cli_serv(server)->routes = link_node->next)
+        forward_loopadvert = 1;
     }
     route_count--;
     
@@ -218,12 +228,18 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
     route_count++;
     if(is_lowest_cost) { // as first
       new_lowest_link = 1;
-      link_node->next = cli_serv(server)->routes;
+      if(link_node->next = cli_serv(server)->routes)
+        forward_loopadvert = 1;
       cli_serv(server)->routes = link_node;
     }
     else { // after cost_prev entry
       link_node->next = cost_prev->next;
       cost_prev->next = link_node;
+      
+      if(cost_prev == cli_serv(server)->routes) {
+        // second entry, notify primary about this backup link
+        forward_loopadvert = 1;
+      }
     }
   }
   
@@ -235,6 +251,7 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
   // check if there is still a route present
   if(route_count) {
     cnode = cli_serv(server)->routes;
+    acptr = cnode->next ? FindNServer(cnode->link_client) : NULL;
     
     // update position in local server tree if needed
     if(do_reparent_server || new_lowest_link) {
@@ -252,12 +269,17 @@ int update_server_route(struct Client *cptr, struct Client *server, struct Clien
     
     if(forward_advertisement) {
       // forward to neighbours
-      if(parent)
-        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, cptr, server, "%.2s %.2s %u", cli_yxx(server), cnode->link_parent, cli_linkcost(server));
-      else if(!parent && route_count <= 1) {
-        sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, cptr, cli_from(server), "%C %C %u", server, cli_serv(server)->up, cli_linkcost(server));
-        sendcmdto_prio_one(&me, CMD_LINKCHANGE, cli_from(server), "%C %C - :%s", server, uplink, comment);
-      }
+      sendcmdto_neighbours_buttwo(&me, CMD_LINKCHANGE, cptr, acptr ? acptr : cli_from(server), "%.2s %.2s %u %s%.2s", 
+          cli_yxx(server), cnode->link_parent, cli_linkcost(server), numpath, cli_yxx(&me));
+    }
+    
+    if(forward_loopadvert) {
+      if(acptr)
+        sendcmdto_prio_one(&me, CMD_LINKCHANGE, acptr, "%.2s %.2s %u %s%.2s", cli_yxx(server), cnode->next->link_parent, 
+          cnode->next->link_cost, numpath, cli_yxx(&me));
+      else
+        sendcmdto_prio_one(&me, CMD_LINKCHANGE, cli_from(server), "%.2s %.2s - %s%.2s :%s", cli_yxx(server), cnode->link_parent,
+          numpath, cli_yxx(&me), comment);
     }
   }
   else if(!parent) {
@@ -415,7 +437,7 @@ static void remove_uplink_routes_recursive(struct Client *uplink, struct Client 
    * this may change the position of lncli in the server link tree,
    * so it could be that it is no longer a downlink of `uplink`
    */
-  update_server_route(uplink, client, uplink, NULL, linkcost, comment);
+  update_server_route(uplink, client, uplink, NULL, linkcost, "", comment);
 }
 
 /** Clear all routing related structs and clear references in server struct

@@ -704,7 +704,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if(!linkcost)
     linkcost = 1;
   
-  update_server_route(acptr, acptr, acptr, &me, linkcost, NULL);
+  update_server_route(acptr, acptr, acptr, &me, linkcost, "", NULL);
   ret = server_estab(acptr, aconf, announce_link);
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
@@ -796,12 +796,17 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     linkcost = hop;
 
   linkcost += cli_linkcost(cptr);
+  
+  char numbuf[3];
+  numbuf[0] = parv[6][0];
+  numbuf[1] = parv[6][1];
+  numbuf[2] = 0;
 
   if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
     /* we already know the server, so do not continue processing here
      * use the provided information as a link change advertisement
      */
-    update_server_route(cptr, acptr, cptr, sptr, linkcost, NULL);
+    update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf, NULL);
     return 0;
   }
 
@@ -840,7 +845,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   add_client_to_list(acptr);
   hAddClient(acptr);
   
-  update_server_route(cptr, acptr, cptr, sptr, linkcost, NULL);
+  update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf, NULL);
   
   if (*parv[5] == 'J')
   {
