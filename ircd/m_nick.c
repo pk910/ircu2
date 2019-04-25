@@ -95,6 +95,7 @@
 #include "numnicks.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "sys.h"
@@ -381,6 +382,17 @@ int ms_nick(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     IPcheck_connect_fail(acptr, 0);
     exit_client(cptr, acptr, &me, "Overridden by other sign on");
     return set_nick_name(cptr, sptr, nick, parc, parv);
+  }
+  
+  /*
+   * If numnics are equal this might just be a duplicate announcement or 
+   * routing failure. Just ignore this announcement in that case.
+   */
+  if (IsServer(sptr) && cli_user(acptr) && 
+      RouteLinkNumIs(parv[parc - 2], cli_user(acptr)->server) && 
+      strcmp(parv[parc - 2] + 2, cli_yxx(acptr)) == 0
+  ) {
+    return 0;
   }
   /*
    * Decide, we really have a nick collision and deal with it

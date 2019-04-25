@@ -44,27 +44,12 @@ struct RouteInfo {
 * node struct for a list of all neighbours I can see the server on (the server which references this list)
 */
 struct RouteList {
+  struct RouteList *next;
   unsigned int link_islocal  :  1; /**< is a local link (server directly connected to me) */
-  unsigned int link_cost     : 31; /**< total const to send to server via   */
+  unsigned int link_cost     : 31; /**< total const to send to server via this route */
   char link_client[2];
   char link_parent[2];
-  struct RouteList *next;
-};
-
-/* announcement info node struct
-* node struct for a list of pending link announcements to neighbours
-* used to collect and merge announcements for same neighbour to reducuce announcement spam
-*/
-struct LinkAnnounceBuf {
-  struct LinkAnnounceBuf *next;
-  unsigned int length;
-  char data[20];
-};
-struct LinkAnnounceDst {
-  struct Client *client;
-  struct LinkAnnounceBuf *first;
-  struct LinkAnnounceBuf *last;
-  struct LinkAnnounceDst *next;
+  char *link_numpath;
 };
 
 /* macro for numnick compare with client */
@@ -73,11 +58,12 @@ struct LinkAnnounceDst {
 #define RouteLinkNumSet(num, cli) (memcpy(num, cli_yxx(cli), 2))
 
 /* routing functions */
-extern int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost);
-extern void send_announce_to_neighbours_buf(struct LinkAnnounceDst **lnabuf, struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost);
-extern void send_announce_to_one_buf(struct LinkAnnounceDst **lnabuf, struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost);
-extern void flush_link_announcements(struct LinkAnnounceDst *lnabuf, const char *numpath);
-extern void remove_uplink_routes(struct Client *uplink, const char *comment);
+extern int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *numpath);
+extern void denounce_server_route(struct Client *cptr, struct Client *server, const char *parentnum, const char *numpath);
+extern void send_announce_to_neighbours_buf(struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath);
+extern void send_announce_to_one_buf(struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath);
+extern void flush_link_announcements();
+extern void remove_uplink_routes(struct Client *uplink);
 extern void free_server_routes(struct Client *uplink);
 extern void impersonate_client(struct Client *client, struct Client *victim);
 

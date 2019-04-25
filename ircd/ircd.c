@@ -53,6 +53,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_stats.h"
 #include "send.h"
 #include "sys.h"
@@ -115,6 +116,7 @@ static char   *dbg_client;                /**< Client specifier for chkconf */
 static struct Timer connect_timer; /**< timer structure for try_connections() */
 static struct Timer ping_timer; /**< timer structure for check_pings() */
 static struct Timer destruct_event_timer; /**< timer structure for exec_expired_destruct_events() */
+static struct Timer link_announcement_timer; /**< timer structure for flush_link_announcements() */
 
 /** Daemon information. */
 static struct Daemon thisServer  = { 0, 0, 0, 0, 0, 0, -1 };
@@ -732,6 +734,7 @@ int main(int argc, char **argv) {
   timer_add(timer_init(&connect_timer), try_connections, 0, TT_RELATIVE, 1);
   timer_add(timer_init(&ping_timer), check_pings, 0, TT_RELATIVE, 1);
   timer_add(timer_init(&destruct_event_timer), exec_expired_destruct_events, 0, TT_PERIODIC, 60);
+  timer_add(timer_init(&link_announcement_timer), flush_link_announcements, 0, TT_PERIODIC, 5);
 
   CurrentTime = time(NULL);
 

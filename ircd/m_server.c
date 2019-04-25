@@ -705,11 +705,8 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if(!linkcost)
     linkcost = 1;
   
-  struct LinkAnnounceDst *lnabuf = NULL;
-  update_server_route(&lnabuf, acptr, acptr, acptr, &me, linkcost);
-  ret = server_estab(acptr, aconf, announce_link, &lnabuf);
-  if(lnabuf)
-    flush_link_announcements(lnabuf, "");
+  ret = server_estab(acptr, aconf, announce_link);
+  update_server_route(acptr, acptr, acptr, &me, linkcost, "");
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
       labs(cli_serv(acptr)->timestamp - recv_time) > 30) {
@@ -755,7 +752,6 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   time_t           start_timestamp;
   time_t           timestamp;
   unsigned int     linkcost;
-  struct LinkAnnounceDst *lnabuf = NULL;
 
   if (parc < 8)
   {
@@ -799,18 +795,20 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     linkcost = 0;
   linkcost += con_linkcost(cli_connect(cptr));
   
-  char numbuf[3];
-  numbuf[0] = parv[6][0];
-  numbuf[1] = parv[6][1];
-  numbuf[2] = 0;
+  char numbuf[128];
+  int numbufpos = 0;
+  
+  numbuf[numbufpos++] = parv[6][0];
+  numbuf[numbufpos++] = parv[6][1];
+  bcptr = sptr;
+  do {
+    numbuf[numbufpos++] = cli_yxx(bcptr)[0];
+    numbuf[numbufpos++] = cli_yxx(bcptr)[1];
+  } while((bcptr = cli_serv(bcptr)->up) && bcptr != &me);
+  numbuf[numbufpos] = 0;
 
   if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
-    /* we already know the server, so do not continue processing here
-     * use the provided information as a link change advertisement
-     */
-    update_server_route(&lnabuf, cptr, acptr, cptr, sptr, linkcost);
-    if(lnabuf)
-      flush_link_announcements(lnabuf, numbuf);
+    /* we already know the server, so do not continue processing here */
     return 0;
   }
 
@@ -849,10 +847,6 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   add_client_to_list(acptr);
   hAddClient(acptr);
   
-  update_server_route(&lnabuf, cptr, acptr, cptr, sptr, linkcost);
-  if(lnabuf)
-    flush_link_announcements(lnabuf, numbuf);
-  
   if (*parv[5] == 'J')
   {
     SetBurst(acptr);
@@ -879,7 +873,9 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                   cli_name(acptr), hop + 1, parv[4], parv[5],
                   NumServCap(acptr), IsHub(acptr) ? "h" : "",
                   IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
-                  IsRouter(acptr) ? "r" : "", cli_linkcost(acptr), cli_info(acptr));
+                  IsRouter(acptr) ? "r" : "", linkcost, cli_info(acptr));
   }
+  
+  update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf);
   return 0;
 }

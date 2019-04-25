@@ -399,16 +399,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
   }
   else {
     struct Client *acptr = user->server;
-
-    if (cli_from(acptr) != cli_from(sptr))
-    {
-      sendcmdto_one(&me, CMD_KILL, cptr, "%C :%s (%s != %s[%s])",
-                    sptr, cli_name(&me), cli_name(user->server), cli_name(cli_from(acptr)),
-                    cli_sockhost(cli_from(acptr)));
-      SetFlag(sptr, FLAG_KILLED);
-      return exit_client(cptr, sptr, &me, "NICK server wrong direction");
-    }
-    else if (HasFlag(acptr, FLAG_TS8))
+    if (HasFlag(acptr, FLAG_TS8))
       SetFlag(sptr, FLAG_TS8);
 
     /*

@@ -53,6 +53,30 @@
 #include <string.h>
 #include <stdio.h>
 
+/* announcement info node struct
+* node struct for a list of pending link announcements to neighbours
+* used to collect and merge announcements for same neighbour to reducuce announcement spam
+*/
+struct LinkAnnounceBuf {
+  struct LinkAnnounceBuf *next;
+  unsigned int length;
+  char data[20];
+};
+
+struct LinkAnnounceBufDst {
+  struct Client *client;
+  struct LinkAnnounceBuf *denounce;
+  struct LinkAnnounceBuf *first;
+  struct LinkAnnounceBuf *last;
+  struct LinkAnnounceBufDst *next;
+};
+
+// static buffer for link advertisements
+static struct LinkAnnounceBufHead {
+  char *numpath;
+  struct LinkAnnounceBufDst *first;
+} linkadv_buf = {NULL, NULL};
+
 // own route version index counter
 static int build_router_version_counter = 1;
 
@@ -61,15 +85,20 @@ static char build_route_buf[(NN_MAX_SERVER*2)+1];
 static int build_route_buflen;
 
 // internal function declarations
+static int process_server_route_update(struct Client *cptr, struct Client *server, int update_flags);
 static void update_server_parent(struct Client *server);
-static void update_server_parent_recursive(struct Client *downlink, unsigned int hopcount);
 static void update_server_uplink(struct Client *server);
-static void update_server_uplink_recursive(struct Client *server, struct Client *uplink);
+static void update_server_uplink_clients(struct Client *server, struct Client *uplink);
 static void deprecate_own_server_routes();
-static void remove_uplink_routes_recursive(struct LinkAnnounceDst **lnabuf, struct Client *uplink, struct Client *client, unsigned int linkcost);
 static void free_routeinfo(struct RouteInfo *routeinfo);
 static void build_route_recursive(struct Client *server, struct RouteInfo *netroute, int *routehint_ptr);
 static void announce_server_route(struct Client *client, struct Client *server, struct RouteInfo *routeinfo);
+
+// route update flags
+#define ROUTE_UPDATE_NEW_PRIMARY   0x01
+#define ROUTE_UPDATE_NEW_SECONDARY 0x02
+#define ROUTE_UPDATE_SWITCH_PARENT 0x04
+
 
 /** Handle link announcement from uplink for and remember as route.
  *
@@ -94,33 +123,29 @@ static void announce_server_route(struct Client *client, struct Client *server, 
            2 if the update changed something and no more uplink route present for server
  *         0 otherwise
  */
-int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost) {
+int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *numpath) {
   struct RouteList *cnode, *link_node = NULL, *prev_node = NULL, *link_prev = NULL, *cost_prev = NULL;
   int is_local_route = (server == uplink);  // is the updated route a local route?
+  int update_flags = 0;
   int is_lowest_cost = 0; // is this route the best one?
-  int new_lowest_link = 0; // has the lowest link to the server changed?
   int do_reinsert_route = 0; // need to remove (if existing) and reinsert (if not denounced) route to routes list (ensuring list order)
   int do_reparent_server = 0; // need to reparent the server in the local server link tree
-  int route_count = 0;
   int forward_advertisement = 0; // do we have forwarded this update to our neighbours?
   int forward_loopadvert = 0; // do we have forwarded this loop route to our neighbours?
-  assert(0 != cli_serv(server));
-  assert(0 != cli_local(uplink) || 0 == parent);
   
   if(is_local_route)
     is_lowest_cost = 1;
-  if(!parent)
+  if(!parent) {
     do_reinsert_route = 1;
+  }
   
   //if(!cli_serv(server)->routes || !(cfrom = FindNServer(cli_serv(server)->routes->link_client)))
   //  cfrom = cli_from(server);
   
   // search existing link and determinate new position in sorted list
   for(cnode = cli_serv(server)->routes; cnode; cnode = cnode->next) {
-    route_count++;
-    
     if(!(is_lowest_cost || cost_prev || !parent) && (
-      cnode->link_cost > linkcost
+      cnode->link_cost > linkcost && !cnode->link_islocal
     )) { // current entry has higher cost, so need to insert this route before
       if(prev_node)
         cost_prev = prev_node;
@@ -139,11 +164,9 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
         
       // update our information about the route
       if(cnode->link_cost != linkcost) {
-        cnode->link_cost = linkcost; // cost changed
-        
         // ensure propagation if primary link cost changed
         if(!prev_node)
-          new_lowest_link = 1;
+          update_flags |= ROUTE_UPDATE_NEW_PRIMARY;
         
         // check if route position in ordered list is still ok, or if we need to reorder
         if(linkcost < cnode->link_cost && prev_node && 
@@ -154,6 +177,9 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
           (cnode->next->link_cost < linkcost && (!is_local_route || cnode->next->link_islocal))
         ) // linkcost increased and next node has lower cost, so we need to reorder
           do_reinsert_route = 1;
+        
+        // set new link cost
+        cnode->link_cost = linkcost;
       }
       
       // check if parent of server in route changed
@@ -163,7 +189,13 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
         
         // if this is the primary uplink we need to reparent the server in the local server tree
         if(!prev_node)
-          do_reparent_server = 1;
+          update_flags |= ROUTE_UPDATE_SWITCH_PARENT;
+      }
+      
+      // check if numeric path of route changed
+      if(strcmp(cnode->link_numpath, numpath)) {
+        MyFree(cnode->link_numpath);
+        DupString(cnode->link_numpath, numpath);
       }
     }
     else
@@ -184,6 +216,7 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
       link_node->link_cost = linkcost;
       RouteLinkNumSet(link_node->link_client, uplink);
       RouteLinkNumSet(link_node->link_parent, parent);
+      DupString(link_node->link_numpath, numpath);
       do_reinsert_route = 1;
     }
   }
@@ -192,17 +225,16 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
     if(link_prev) {
       link_prev->next = link_node->next;
       if(link_prev == cli_serv(server)->routes)
-        forward_loopadvert = 1;
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
     }
     else {
-      new_lowest_link = 1;
+      update_flags |= ROUTE_UPDATE_NEW_PRIMARY;
       if(cli_serv(server)->routes = link_node->next)
-        forward_loopadvert = 1;
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
     }
-    route_count--;
-    
     if(!parent) {
       // link denouncement - free list entry and do not add it to the list anymore
+      MyFree(link_node->link_numpath);
       MyFree(link_node);
       link_node = NULL;
       do_reinsert_route = 0;
@@ -221,11 +253,10 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
         is_lowest_cost = 1;
     }
     // insert link node to list
-    route_count++;
     if(is_lowest_cost) { // as first
-      new_lowest_link = 1;
+      update_flags |= ROUTE_UPDATE_NEW_PRIMARY;
       if(link_node->next = cli_serv(server)->routes)
-        forward_loopadvert = 1;
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
       cli_serv(server)->routes = link_node;
     }
     else { // after cost_prev entry
@@ -234,60 +265,144 @@ int update_server_route(struct LinkAnnounceDst **lnabuf, struct Client *cptr, st
       
       if(cost_prev == cli_serv(server)->routes) {
         // second entry, notify primary about this backup link
-        forward_loopadvert = 1;
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
       }
     }
   }
   
-  if(route_count > 1)
+  return process_server_route_update(cptr, server, update_flags);
+}
+
+void denounce_server_route(struct Client *cptr, struct Client *server, const char *parentnum, const char *numpath) {
+  struct RouteList *cnode, *next_node, *prev_node = NULL;
+  struct Client *acptr;
+  int denounced_links = 0, backup_links = 0;
+  int update_flags = 0;
+  
+  for(cnode = cli_serv(server)->routes; cnode; cnode = next_node) {
+    next_node = cnode->next;
+    
+    if(cnode->link_parent[0] == parentnum[0] && cnode->link_parent[1] == parentnum[1]) {
+      denounced_links++;
+      
+      if(prev_node)
+        prev_node->next = next_node;
+      else
+        cli_serv(server)->routes = next_node;
+      
+      MyFree(cnode->link_numpath);
+      MyFree(cnode);
+    }
+    else {
+      backup_links++;
+      if(backup_links == 1 && denounced_links > 0)
+        update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+      if(backup_links == 2 && denounced_links > 0)
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+      prev_node = cnode;
+    }
+  }
+  
+  if(denounced_links) {
+    if(backup_links == 0)
+      update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+    if(backup_links == 1 || (backup_links == 0 && denounced_links > 1))
+      update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+    
+    send_announce_to_neighbours_buf(cptr, 0, cli_yxx(server), parentnum, 0, 1, numpath);
+    process_server_route_update(cptr, server, update_flags);
+  }
+  
+  for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
+    if(!IsServer(acptr))
+      continue;
+    
+    prev_node = NULL;
+    update_flags = 0;
+    denounced_links = backup_links = 0;
+    for(cnode = cli_serv(acptr)->routes; cnode; cnode = next_node) {
+      next_node = cnode->next;
+      
+      if(RouteLinkNumIs(cnode->link_client, server) && cnode->link_parent[0] == parentnum[0] && cnode->link_parent[1] == parentnum[1]) {
+        denounced_links++;
+        
+        if(prev_node)
+          prev_node->next = next_node;
+        else
+          cli_serv(acptr)->routes = next_node;
+        
+        MyFree(cnode->link_numpath);
+        MyFree(cnode);
+      }
+      else {
+        backup_links++;
+        if(backup_links == 1 && denounced_links > 0)
+          update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+        if(backup_links == 2 && denounced_links > 0)
+          update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+        prev_node = cnode;
+      }
+    }
+    if(denounced_links) {
+      if(backup_links == 0)
+        update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+      if(backup_links == 1 || (backup_links == 0 && denounced_links > 1))
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+      process_server_route_update(cptr, acptr, update_flags);
+    }
+  }
+}
+
+static int process_server_route_update(struct Client *cptr, struct Client *server, int update_flags) {
+  int forward_advertisement = 0;
+  struct RouteList *primary = cli_serv(server)->routes;
+  struct RouteList *secondary = primary ? primary->next : NULL;
+  
+  if(secondary)
     SetRoutingEnabled(server);
   else
     ClearRoutingEnabled(server);
   
   // check if there is still a route present
-  if(route_count) {
-    cnode = cli_serv(server)->routes;
-    
+  if(primary) {
     // update position in local server tree if needed
-    if(do_reparent_server || new_lowest_link) {
-      cli_linkcost(server) = cnode->link_cost;
+    if((update_flags & (ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT))) {
+      cli_linkcost(server) = primary->link_cost;
       deprecate_own_server_routes();
-      
+      forward_advertisement = 1;
       update_server_parent(server);
     }
     
     // update primary uplink if needed
-    if(new_lowest_link) {
+    if((update_flags & ROUTE_UPDATE_NEW_PRIMARY)) {
       update_server_uplink(server);
-      forward_advertisement = 1;
     }
     
     if(forward_advertisement) {
       // forward to neighbours
-      send_announce_to_neighbours_buf(lnabuf, cptr, cli_from(server), cli_yxx(server), cnode->link_parent, cli_linkcost(server));
+      send_announce_to_neighbours_buf(cptr, cli_from(server), cli_yxx(server), primary->link_parent, cli_linkcost(server), 0, primary->link_numpath);
     }
     
-    if(forward_loopadvert) {
+    if((update_flags & ROUTE_UPDATE_NEW_SECONDARY)) {
       // forward secondary link updates (we notify the primary uplink that he can use us as uplink as well)
-      if(cnode->next)
-        send_announce_to_one_buf(lnabuf, cli_from(server), cli_yxx(server), cnode->next->link_parent, cnode->next->link_cost);
+      if(secondary)
+        send_announce_to_one_buf(cli_from(server), cli_yxx(server), secondary->link_parent, secondary->link_cost, 0, secondary->link_numpath);
       else
         // we no longer have an alternative link to server (notifythe primary uplink about it)
-        send_announce_to_one_buf(lnabuf, cli_from(server), cli_yxx(server), cnode->link_parent, 0);
+        send_announce_to_one_buf(cli_from(server), cli_yxx(server), primary->link_parent, 0, 0, "");
     }
   }
-  else if(!parent) {
+  else {
     // no more neighbours but uplink must assume there is still one (would have sent a SQUIT if not)
     // probably a timing issue, so we exit the server ourself to ensure this is properly propagated
-    if(!linkcost)
-      exit_client(cptr, server, uplink, "no route to server");
+    //if((update_flags & ROUTE_UPDATE_EXIT_CLIENTS))
+    //  exit_client(cptr, server, uplink, "no route to server");
     forward_advertisement = 2;
   }
-  
   return forward_advertisement;
 }
 
-void send_announce_to_neighbours_buf(struct LinkAnnounceDst **lnabuf, struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost) {
+void send_announce_to_neighbours_buf(struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath) {
   struct DLink *lp;
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (skip1 && lp->value.cptr == skip1)
@@ -295,51 +410,109 @@ void send_announce_to_neighbours_buf(struct LinkAnnounceDst **lnabuf, struct Cli
     if (skip2 && lp->value.cptr == skip2)
       continue;
     
-    send_announce_to_one_buf(lnabuf, lp->value.cptr, servernum, parentnum, linkcost);
+    send_announce_to_one_buf(lp->value.cptr, servernum, parentnum, linkcost, denounce, numpath);
   }
 }
 
-void send_announce_to_one_buf(struct LinkAnnounceDst **lnabuf, struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost) {
+void send_announce_to_one_buf(struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath) {
+  struct LinkAnnounceBuf *cbuf = NULL;
+  struct LinkAnnounceBufDst *cbufdst = NULL, *pbufdst = NULL;
+  int i;
+  
   if(RouteLinkNumIs(servernum, client))
     return;
   
-  struct LinkAnnounceBuf *cbuf = MyMalloc(sizeof(*cbuf));
-  struct LinkAnnounceDst *cbufdst, *pbufdst = NULL;
-  for(cbufdst = *lnabuf; cbufdst; cbufdst = cbufdst->next) {
+  if(numpath) {
+    for(i = 0; numpath[i]; i+=2) {
+      if(RouteLinkNumIs((numpath + i), client))
+        return;
+    }
+  }
+  
+  if(linkadv_buf.numpath && strcmp(linkadv_buf.numpath, numpath))
+    flush_link_announcements();
+  
+  for(cbufdst = linkadv_buf.first; cbufdst; cbufdst = cbufdst->next) {
     if(cbufdst->client == client)
       break;
     pbufdst = cbufdst;
   }
+  
   if(!cbufdst) {
-    cbufdst = MyMalloc(sizeof(*cbufdst));
+    cbufdst = MyCalloc(1, sizeof(*cbufdst));
     cbufdst->client = client;
-    cbufdst->first = cbuf;
-    cbufdst->next = NULL;
     if(pbufdst)
       pbufdst->next = cbufdst;
-    else
-      *lnabuf = cbufdst;
+    else {
+      DupString(linkadv_buf.numpath, numpath);
+      linkadv_buf.first = cbufdst;
+    }
+  }
+  
+  if(denounce) {
+    cbuf = cbufdst->denounce;
   }
   else {
-    cbufdst->last->next = cbuf;
+    for(cbuf = cbufdst->first; cbuf; cbuf = cbuf->next) {
+      if(cbuf->data[0] == servernum[0] && cbuf->data[1] == servernum[1])
+        break;
+    }
+    if(cbufdst->denounce && cbufdst->denounce->data[2] == parentnum[0] && cbufdst->denounce->data[3] == parentnum[1])
+      return;
   }
   
-  cbuf->next = NULL;
-  cbuf->length = sprintf(cbuf->data, "%.2s%.2s%u", servernum, parentnum, linkcost);
-  cbufdst->last = cbuf;
+  if(!cbuf) {
+    cbuf = MyCalloc(1, sizeof(*cbuf));
+  
+    if(denounce)
+      cbufdst->denounce = cbuf;
+    else {
+      if(cbufdst->last)
+        cbufdst->last->next = cbuf;
+      else
+        cbufdst->first = cbuf;
+      cbufdst->last = cbuf;
+    }
+  }
+  
+  if(denounce)
+    cbuf->length = sprintf(cbuf->data, "%.2s%.2s-", servernum, parentnum);
+  else
+    cbuf->length = sprintf(cbuf->data, "%.2s%.2s%u", servernum, parentnum, linkcost);
 }
 
-void flush_link_announcements(struct LinkAnnounceDst *lnabuf, const char *numpath) {
-  struct LinkAnnounceDst *cbufdst, *nbufdst;
+void flush_link_announcements() {
+  struct LinkAnnounceBufDst *cbufdst, *nbufdst;
   struct LinkAnnounceBuf *cbuf, *nbuf;
+  char *numpath;
+  int free_numpath = 0;
   
-  for(cbufdst = lnabuf; cbufdst; cbufdst = nbufdst) {
+  if((cbufdst = linkadv_buf.first))
+    linkadv_buf.first = NULL;
+  else
+    return;
+  if((numpath = linkadv_buf.numpath)) {
+    free_numpath = 1;
+    linkadv_buf.numpath = NULL;
+  }
+  else
+    numpath = "";
+  
+  for(; cbufdst; cbufdst = nbufdst) {
     nbufdst = cbufdst->next;
+    
     // pack announcements into one message
     build_route_buflen = 0;
+    if((cbuf = cbufdst->denounce)) {
+      memcpy(build_route_buf + build_route_buflen, cbuf->data, cbuf->length);
+      build_route_buflen += cbuf->length;
+      
+      MyFree(cbuf);
+    }
     
     for(cbuf = cbufdst->first; cbuf; cbuf = nbuf) {
       nbuf = cbuf->next;
+      
       if(build_route_buflen)
         build_route_buf[build_route_buflen++] = ' ';
       
@@ -348,7 +521,7 @@ void flush_link_announcements(struct LinkAnnounceDst *lnabuf, const char *numpat
       
       if(build_route_buflen >= 256) {
         build_route_buf[build_route_buflen] = '\0';
-        sendcmdto_prio_one(&me, CMD_LINKCHANGE, cbufdst->client, "%s :%s%.2s", build_route_buf, numpath, cli_yxx(&me));
+        sendcmdto_one(&me, CMD_LINKCHANGE, cbufdst->client, ":%s :%s%.2s", build_route_buf, numpath, cli_yxx(&me));
         build_route_buflen = 0;
       }
       
@@ -356,19 +529,23 @@ void flush_link_announcements(struct LinkAnnounceDst *lnabuf, const char *numpat
     }
     if(build_route_buflen) {
       build_route_buf[build_route_buflen] = '\0';
-      sendcmdto_prio_one(&me, CMD_LINKCHANGE, cbufdst->client, "%s :%s%.2s", build_route_buf, numpath, cli_yxx(&me));
+      sendcmdto_one(&me, CMD_LINKCHANGE, cbufdst->client, ":%s :%s%.2s", build_route_buf, numpath, cli_yxx(&me));
       build_route_buflen = 0;
     }
     
     MyFree(cbufdst);
   }
+  
+  if(free_numpath)
+    MyFree(numpath);
 }
 
 static void update_server_parent(struct Client *server) {
+  struct Client *acptr;
   struct Client *old_parent = cli_serv(server)->up;
   struct Client *new_parent = FindNServer(cli_serv(server)->routes->link_parent);
   
-  if(!old_parent || !new_parent || old_parent == new_parent)
+  if(!old_parent || !new_parent || old_parent == new_parent || server == new_parent)
     return;
   
   /* Remove downlink list node from old parent server */
@@ -378,18 +555,13 @@ static void update_server_parent(struct Client *server) {
   cli_serv(server)->updown = add_dlink(&(cli_serv(new_parent))->down, server);
   cli_serv(server)->up = new_parent;
   
-  update_server_parent_recursive(server, cli_hopcount(new_parent) + 1);
-}
-
-static void update_server_parent_recursive(struct Client *server, unsigned int hopcount) {
-  struct DLink *link;
-  
-  // update client hopcount
-  cli_hopcount(server) = hopcount;
-  
-  // loop through all downlinks
-  for (link = cli_serv(server)->down; link; link = link->next)
-    update_server_parent_recursive(link->value.cptr, hopcount + 1);
+  /* Update hopcount */
+  for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
+    if(IsServer(acptr))
+      cli_hopcount(acptr) = cli_hopcount(cli_serv(acptr)->up) + 1;
+    else if(IsUser(acptr))
+      cli_hopcount(acptr) = cli_hopcount(cli_user(acptr)->server) + 1;
+  }
 }
 
 static void update_server_uplink(struct Client *server) {
@@ -414,26 +586,36 @@ static void update_server_uplink(struct Client *server) {
   }
   
   /* Set uplink connection on server and all associated clients */
-  update_server_uplink_recursive(server, new_uplink);
+  update_server_uplink_clients(server, new_uplink);
 }
 
-static void update_server_uplink_recursive(struct Client *server, struct Client *uplink) {
-  struct DLink *link;
-  struct Client **acptrp;
-  int i;
+static void update_server_uplink_clients(struct Client *server, struct Client *uplink) {
+  struct Client *acptr, *scptr;
+  int need_update;
   
   // update connection of server
   cli_connect(server) = cli_connect(uplink);
   
-  // loop through all downlinks
-  for (link = cli_serv(server)->down; link; link = link->next) {
-    update_server_uplink_recursive(link->value.cptr, uplink);
-  }
-  // loop through all clients of server
-  acptrp = cli_serv(server)->client_list;
-  for (i = 0; i <= cli_serv(server)->nn_mask; ++acptrp, ++i) {
-    if (*acptrp)
-      cli_connect(*acptrp) = cli_connect(uplink);
+  for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
+    need_update = 0;
+    
+    if(IsUser(acptr))
+      scptr = cli_user(acptr)->server;
+    else if(IsServer(acptr) && acptr != server)
+      scptr = acptr;
+    else
+      continue;
+    
+    do {
+      if(scptr == server) {
+        need_update = 1;
+        break;
+      }
+    } while((scptr = cli_serv(scptr)->up) && scptr != &me);
+    
+    if(need_update) {
+      cli_connect(server) = cli_connect(uplink);
+    }
   }
 }
 
@@ -457,7 +639,7 @@ void impersonate_client(struct Client *client, struct Client *victim) {
   
   // update cli_connect references
   LocalClientArray[cli_fd(client)] = victim;
-  update_server_uplink_recursive(victim, client);
+  update_server_uplink_clients(victim, client);
   cli_from(victim) = victim;
   cli_status(client) = STAT_UNKNOWN;
   
@@ -470,49 +652,54 @@ void impersonate_client(struct Client *client, struct Client *victim) {
 
 /** Remove routes that used uplink from all servers
  * @param uplink The uplink that is removed
- * @param comment The remove reason
- * @return 1 if the update changed something on the primary uplink (update should be propagated)
- *         0 otherwise
  */
-void remove_uplink_routes(struct Client *uplink, const char *comment) {
-  struct DLink *link, *nextlink;
-  struct Client *lncli;
-  struct LinkAnnounceDst *lnabuf = NULL;
+void remove_uplink_routes(struct Client *uplink) {
+  // generate denounce
+  denounce_server_route(&me, uplink, cli_yxx(&me), "");
   
-  // denounce primary routes via uplink (but do not exit any client)
-  remove_uplink_routes_recursive(&lnabuf, uplink, uplink, 1);
+  struct Client *acptr;
+  struct RouteList *cnode, *next_node, *prev_node;
+  int denounced_links, backup_links, update_flags;
   
-  // denounce non-primary routes via uplink
-  for (link = cli_serv(&me)->down; link; link = nextlink) {
-    lncli = link->value.cptr;
-    nextlink = link->next;
-    if(lncli == uplink)
+  // denounce other routes via uplink
+  for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
+    if(!IsServer(acptr))
       continue;
-    remove_uplink_routes_recursive(&lnabuf, uplink, lncli, 0);
-  }
-  
-  if(lnabuf)
-    flush_link_announcements(lnabuf, "");
-}
-
-static void remove_uplink_routes_recursive(struct LinkAnnounceDst **lnabuf, struct Client *uplink, struct Client *client, unsigned int linkcost) {
-  struct DLink *link, *nextlink;
-  struct Client *lncli;
-  
-  // loop through all downlinks and remove uplink route if set
-  for (link = cli_serv(client)->down; link; link = nextlink) {
-    lncli = link->value.cptr;
-    nextlink = link->next;
     
-    // recursively remove from downlinks first
-    remove_uplink_routes_recursive(lnabuf, uplink, lncli, linkcost);
+    prev_node = NULL;
+    update_flags = 0;
+    denounced_links = backup_links = 0;
+    for(cnode = cli_serv(acptr)->routes; cnode; cnode = next_node) {
+      next_node = cnode->next;
+      
+      if(RouteLinkNumIs(cnode->link_client, uplink)) {
+        denounced_links++;
+        
+        if(prev_node)
+          prev_node->next = next_node;
+        else
+          cli_serv(acptr)->routes = next_node;
+        
+        MyFree(cnode->link_numpath);
+        MyFree(cnode);
+      }
+      else {
+        backup_links++;
+        if(backup_links == 1 && denounced_links > 0)
+          update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+        if(backup_links == 2 && denounced_links > 0)
+          update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+        prev_node = cnode;
+      }
+    }
+    if(denounced_links) {
+      if(backup_links == 0)
+        update_flags |= ROUTE_UPDATE_NEW_PRIMARY | ROUTE_UPDATE_SWITCH_PARENT;
+      if(backup_links == 1 || (backup_links == 0 && denounced_links > 1))
+        update_flags |= ROUTE_UPDATE_NEW_SECONDARY;
+      process_server_route_update(uplink, acptr, update_flags);
+    }
   }
-  
-  /* remove uplink route (parent = NULL)
-   * this may change the position of lncli in the server link tree,
-   * so it could be that it is no longer a downlink of `uplink`
-   */
-  update_server_route(lnabuf, uplink, client, uplink, NULL, linkcost);
 }
 
 /** Clear all routing related structs and clear references in server struct
@@ -523,6 +710,7 @@ void free_server_routes(struct Client *uplink) {
   struct RouteList *link, *next_link;
   for(link = cli_serv(uplink)->routes; link; link = next_link) {
     next_link = link->next;
+    MyFree(link->link_numpath);
     MyFree(link);
   }
   cli_serv(uplink)->routes = NULL;

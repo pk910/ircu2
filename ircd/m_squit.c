@@ -102,7 +102,7 @@ int ms_squit(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return 0;
   }
   
-  if(!MyConnect(acptr)) {
+  if(IsUser(sptr) && !MyConnect(acptr)) {
     // just forward the squit
     sendcmdto_one(sptr, CMD_SQUIT, cli_from(acptr), "%s 0 :%s", cli_name(acptr), comment);
     return 0;

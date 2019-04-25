@@ -138,7 +138,7 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
       while((linkinfo = linkinfo->next) && alp < 250) {
         if(!alp)
           alp += sprintf(altlinks, ", alt: ");
-        alp += sprintf(altlinks + alp, "%s%.2s:%u", (cnt++ ? "," : ""), linkinfo->link_client, linkinfo->link_cost);
+        alp += sprintf(altlinks + alp, "%s%.2s%.2s:%u", (cnt++ ? "," : ""), linkinfo->link_client, linkinfo->link_parent, linkinfo->link_cost);
       }
     }
     altlinks[alp] = 0;

@@ -98,32 +98,34 @@
  * ms_linkchange - uplink change announcement
  *
  * parv[0] = sender prefix
- * parv[1] = target server
- * parv[2] = link announcement 1
- * parv[parc-2] = link announcement n
- * parv[parc-1] = numeric path
+ * parv[1] = data
  */
 int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if(parc < 3)
+  if(parc < 2)
     return need_more_params(sptr, "LINKCHANGE");
   
-  struct LinkAnnounceDst *lnabuf = NULL;
   struct Client* acptr;
   struct Client* parent;
   int i;
   unsigned int linkcost;
-  char *numpath;
+  char *msgdata, *numpath;
   char *announce, tmpch;
   
-  numpath = parv[parc-1];
-  for(i = 0; numpath[i]; i+=2) {
-    if(RouteLinkNumIs((numpath + i), &me))
-      return 0; // ignore if i have already touched it before
+  msgdata = parv[1];
+  if((numpath = strchr(msgdata, ':'))) {
+    *numpath = '\0';
+    numpath++;
+    for(i = 0; numpath[i]; i+=2) {
+      if(RouteLinkNumIs((numpath + i), &me))
+        return 0; // ignore if i have already touched it before
+    }
   }
   
-  for(i = 1; i < parc-1; i++) {
-    announce = parv[i];
+  msgdata = strtok(msgdata, " ");
+  while (msgdata) {
+    announce = msgdata;
+    msgdata = strtok(NULL, " ");
     if(strlen(announce) < 5)
       continue;
     
@@ -142,22 +144,23 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
     parent = FindNServer(announce);
     announce[2] = tmpch;
     announce += 2;
-    if(!parent)
+    
+    if(parent == &me)
       continue;
     
-    if(*announce == '0')
-      // link de-announced
-      linkcost = 0;
+    if(*announce == '-') {
+      denounce_server_route(cptr, acptr, cli_yxx(parent), numpath);
+    }
+    else if(*announce == '0') {
+      update_server_route(cptr, acptr, cptr, NULL, 0, numpath);
+    }
     else {
       linkcost = atoi(announce);
       linkcost += cli_linkcost(cptr);
+      
+      update_server_route(cptr, acptr, cptr, parent, linkcost, numpath);
     }
-  
-    update_server_route(&lnabuf, cptr, acptr, cptr, (linkcost ? parent : NULL), linkcost);
   }
-  
-  if(lnabuf)
-    flush_link_announcements(lnabuf, numpath);
   
   return 0;
 }
