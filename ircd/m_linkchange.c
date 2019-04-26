@@ -162,5 +162,6 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
     }
   }
   
+  flush_link_announcements();
   return 0;
 }

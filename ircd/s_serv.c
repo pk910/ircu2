@@ -130,10 +130,10 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
     /*
      *  Pass my info to the new server
      */
-    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6r 0 :%s",
+    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6%s 0 :%s",
 		  cli_name(&me), cli_serv(&me)->timestamp,
 		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
-		  feature_bool(FEAT_HUB) ? "h" : "",
+		  feature_bool(FEAT_HUB) ? "h" : "", (announce_link & 0x01) ? "r" : "R",
 		  *(cli_info(&me)) ? cli_info(&me) : "IRCers United");
   }
 
@@ -176,7 +176,6 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
   sendto_opmask_butone(acptr, SNO_OLDSNO, "Link with %s established.", inpath);
   sendto_opmask_butone(0, SNO_NETWORK, "Net junction: %s %s", cli_name(&me),
                        cli_name(cptr));
-  SetJunction(cptr);
   
   if((announce_link & 0x01)) {
     /*
@@ -200,6 +199,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
     }
 
     /* send burst messages only if server wasn't already linked with the network via another client */
+    SetJunction(cptr);
     SetBurst(cptr);
     
     /* Send these as early as possible so that glined users/juped servers can
@@ -244,7 +244,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
       if(!(announce_link & 0x01) && (route = cli_serv(acptr)->routes)) {
         send_announce_to_one_buf(cptr, cli_yxx(acptr), 
           route->link_parent, cli_linkcost(acptr), 0, route->link_numpath);
-      } else
+      } else {
         sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
           "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
           cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
@@ -252,6 +252,11 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
           IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
           IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
           cli_linkcost(acptr), cli_info(acptr));
+        if(IsRouter(cptr) && (route = cli_serv(acptr)->routes)) {
+          send_announce_to_one_buf(cptr, cli_yxx(acptr), 
+            route->link_parent, cli_linkcost(acptr), 0, route->link_numpath);
+        }
+      }
     }
   }
 

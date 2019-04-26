@@ -105,7 +105,8 @@ enum lh_type {
   I_AM_NOT_HUB /**< I have another active server link but not FEAT_HUB. */
 };
 
-static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, int hop, int junction, enum lh_type *active_lh_line, struct Client** LHcptr)
+static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, 
+                      int hop, int junction, int looplink, enum lh_type *active_lh_line, struct Client** LHcptr)
 {
   struct Client* acptr;
   
@@ -202,7 +203,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
    * but we neither want to kill a good (old) link.
    * Therefor we kill the second youngest link.
    */
-  else if (!IsRouter(acptr) || numnick[0] != acptr->cli_yxx[0] || numnick[1] != acptr->cli_yxx[1])
+  else if (!IsRouter(acptr) || !looplink || numnick[0] != acptr->cli_yxx[0] || numnick[1] != acptr->cli_yxx[1])
   {
     struct Client* c2ptr = 0;
     struct Client* c3ptr = acptr;
@@ -378,7 +379,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
  * was SQUIT.  1 if the new server is allowed.
  */
 static int
-check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, int hop, int junction)
+check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, int hop, int junction, int looplink)
 {
   struct Client* LHcptr = NULL;
   struct ConfItem* lhconf;
@@ -423,7 +424,7 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
   }
   
   // check loops
-  res = check_loop(cptr, sptr, ghost, host, numnick, timestamp, hop, junction, &active_lh_line, &LHcptr);
+  res = check_loop(cptr, sptr, ghost, host, numnick, timestamp, hop, junction, looplink, &active_lh_line, &LHcptr);
   if(res != 2)
     return res;
   
@@ -508,7 +509,8 @@ void set_server_flags(struct Client *cptr, const char *flags)
     while (*flags) switch (*flags++) {
     case 'h': SetHub(cptr); break;
     case 's': SetService(cptr); break;
-    case 'r': SetRouter(cptr); break;
+    case 'r':
+    case 'R': SetRouter(cptr); break;
     case '6': SetIPv6(cptr); break;
     }
 }
@@ -542,6 +544,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   struct Jupe*     ajupe;
   int              hop;
   int              ret;
+  int              looplink;
   unsigned short   prot;
   time_t           start_timestamp;
   time_t           timestamp;
@@ -641,28 +644,44 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
   memset(cli_passwd(cptr), 0, sizeof(cli_passwd(cptr)));
 
+  // check for +r/+R flag presence
+  ret = 0;
+  looplink = 0;
+  if (parc > 8 && *parv[7] == '+') {
+    for(i = 1; parv[7][i]; i++) {
+      if(parv[7][i] == 'R') {
+        ret = 1;
+        looplink = 1;
+        break;
+      }
+      else if(parv[7][i] == 'r') {
+        ret = 1;
+        break;
+      }
+    }
+  }
+
   if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
     /* received my own server announcement - we're about to close a loop
      * first check if server is signaling routing support via +r flag
      * then ensure the router flag is set in acptr as well otherwise at 
      * least one server in the loop does not support routing!
      */
-    ret = 0;
-    if (parc > 8 && *parv[7] == '+') {
-      for(i = 1; parv[7][i]; i++) {
-        if(parv[7][i] == 'r') {
-          ret = 1;
-          break;
-        }
-      }
-    }
     if(ret && !IsRouter(acptr)) {
       sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: routing loop over incompatible server.", cli_name(cptr));
       return exit_client_msg(cptr, cptr, &me, "Routing loop over incompatible server");
     }
+    else if(looplink && IsBurstOrBurstAck(acptr)) {
+      sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: couldn't create routing loop as server is not fully registered to the network, yet.", cli_name(cptr));
+      return exit_client_msg(cptr, cptr, &me, "cannot create routing loop - active burst");
+    }
+  }
+  else if(looplink) {
+    sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: couldn't create routing loop as server is not known.", cli_name(cptr));
+    return exit_client_msg(cptr, cptr, &me, "cannot create routing loop - unknown server");
   }
 
-  ret = check_loop_and_lh(cptr, sptr, &ghost, host, parv[6], timestamp, hop, 1);
+  ret = check_loop_and_lh(cptr, sptr, &ghost, host, parv[6], timestamp, hop, 1, looplink);
   if (ret != 1)
     return ret;
   
@@ -705,8 +724,8 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if(!linkcost)
     linkcost = 1;
   
-  ret = server_estab(acptr, aconf, announce_link);
   update_server_route(acptr, acptr, acptr, &me, linkcost, "");
+  ret = server_estab(acptr, aconf, announce_link);
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
       labs(cli_serv(acptr)->timestamp - recv_time) > 30) {
@@ -717,6 +736,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     sendcmdto_prio_one(&me, CMD_SETTIME, acptr, "%Tu :%s", TStime(),
 		       cli_name(&me));
   }
+  flush_link_announcements();
 
   return ret;
 }
@@ -812,7 +832,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return 0;
   }
 
-  ret = check_loop_and_lh(cptr, sptr, NULL, host, parv[6], timestamp, hop, parv[5][0] == 'J');
+  ret = check_loop_and_lh(cptr, sptr, NULL, host, parv[6], timestamp, hop, parv[5][0] == 'J', 0);
   if (ret != 1)
     return ret;
   
@@ -827,6 +847,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   cli_serv(acptr)->prot = prot;
   cli_serv(acptr)->timestamp = timestamp;
   cli_hopcount(acptr) = hop;
+  cli_linkcost(acptr) = linkcost;
   ircd_strncpy(cli_name(acptr), host, HOSTLEN);
   ircd_strncpy(cli_info(acptr), parv[parc-1], REALLEN);
   cli_serv(acptr)->up = sptr;
@@ -875,7 +896,5 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                   IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
                   IsRouter(acptr) ? "r" : "", linkcost, cli_info(acptr));
   }
-  
-  update_server_route(cptr, acptr, cptr, sptr, linkcost, numbuf);
   return 0;
 }

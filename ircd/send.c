@@ -237,8 +237,6 @@ void send_buffer(struct Client* to, struct MsgBuf* buf, int prio)
     return;
   }
   
-  flush_link_announcements();
-  
   Debug((DEBUG_SEND, "Sending [%p] to %s", buf, cli_name(to)));
   Debug((DEBUG_PROTO, "SEND [%s:%s] %.*s", GetClientTypeChar(to), to->cli_yxx, buf->length-2, buf->msg));
   

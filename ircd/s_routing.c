@@ -614,7 +614,7 @@ static void update_server_uplink_clients(struct Client *server, struct Client *u
     } while((scptr = cli_serv(scptr)->up) && scptr != &me);
     
     if(need_update) {
-      cli_connect(server) = cli_connect(uplink);
+      cli_connect(acptr) = cli_connect(uplink);
     }
   }
 }
@@ -953,12 +953,14 @@ static void announce_server_route(struct Client *client, struct Client *server, 
   } while(routepos < routestrlen);
 }
 
-int check_received_from_server_route(struct Client *client, struct Client *source) {
+int check_received_from_server_route(struct Client *client, struct Client *source, char *msgbuf) {
   struct RouteInfo *routeinfo;
   struct RouteList *cnode;
   if(IsUser(source))
     source = cli_user(source)->server;
   
+  if(!strncmp(msgbuf, "S ", 2) || !strncmp(msgbuf, "LC ", 3))
+    return 1;
   if(!(routeinfo = cli_serv(source)->fwd_route))
     return 0;
   if(RouteLinkNumIs(routeinfo->route_src, client))

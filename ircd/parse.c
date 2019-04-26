@@ -1049,6 +1049,9 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
           buffer, cli_name(cptr)));
       return 0;
     }
+    
+    while (*ch == ' ')
+      ch++;
   }
   else
   {
@@ -1125,8 +1128,11 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
 
     /* Let para[0] point to the name of the sender */
     para[0] = cli_name(from);
+    
+    while (*ch == ' ')
+      ch++;
 
-    if (cli_from(from) != cptr && !check_received_from_server_route(cptr, from))
+    if (cli_from(from) != cptr && !check_received_from_server_route(cptr, from, ch))
     {
       ServerStats->is_wrdi++;
       Debug((DEBUG_NOTICE, "Fake direction: Message (%s) coming from (%s)",
@@ -1134,9 +1140,6 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
       return 0;
     }
   }
-
-  while (*ch == ' ')
-    ch++;
   if (*ch == '\0')
   {
     ServerStats->is_empt++;

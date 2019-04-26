@@ -73,6 +73,6 @@ extern struct RouteInfo *build_forward_route(struct Client *uplink, struct Route
 extern void update_server_netroute(struct Client *server, struct Client *uplink, struct RouteInfo *netroute);
 
 extern int check_forward_to_server_route(struct Client *server, struct Client *uplink);
-extern int check_received_from_server_route(struct Client *server, struct Client *source);
+extern int check_received_from_server_route(struct Client *server, struct Client *source, char *msgbuf);
 
 #endif /* INCLUDED_s_routing_h */

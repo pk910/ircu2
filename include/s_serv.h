@@ -11,7 +11,6 @@
 
 struct ConfItem;
 struct Client;
-struct LinkAnnounceDst;
 
 extern unsigned int max_connection_count;
 extern unsigned int max_client_count;
