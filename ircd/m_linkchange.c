@@ -109,18 +109,10 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
   struct Client* parent;
   int i;
   unsigned int linkcost;
-  char *msgdata, *numpath;
+  char *msgdata;
   char *announce, tmpch;
   
   msgdata = parv[1];
-  if((numpath = strchr(msgdata, ':'))) {
-    *numpath = '\0';
-    numpath++;
-    for(i = 0; numpath[i]; i+=2) {
-      if(RouteLinkNumIs((numpath + i), &me))
-        return 0; // ignore if i have already touched it before
-    }
-  }
   
   msgdata = strtok(msgdata, " ");
   while (msgdata) {
@@ -148,17 +140,15 @@ int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv
     if(parent == &me)
       continue;
     
-    if(*announce == '-') {
-      denounce_server_route(cptr, acptr, cli_yxx(parent), numpath);
-    }
-    else if(*announce == '0') {
-      update_server_route(cptr, acptr, cptr, NULL, 0, numpath);
-    }
+    if(*announce == '-')
+      denounce_server_route(cptr, acptr, cli_yxx(cptr), cli_yxx(parent), 1);
+    else if(*announce == '0')
+      denounce_server_route(cptr, acptr, cli_yxx(cptr), cli_yxx(parent), 0);
     else {
       linkcost = atoi(announce);
       linkcost += cli_linkcost(cptr);
       
-      update_server_route(cptr, acptr, cptr, parent, linkcost, numpath);
+      announce_server_link(cptr, acptr, cptr, parent, linkcost);
     }
   }
   

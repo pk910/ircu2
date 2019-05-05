@@ -49,19 +49,20 @@ struct RouteList {
   unsigned int link_cost     : 31; /**< total const to send to server via this route */
   char link_client[2];
   char link_parent[2];
-  char *link_numpath;
 };
 
 /* macro for numnick compare with client */
-#define RouteLinkNumIs(num, cli) (num[0] == cli_yxx(cli)[0] && num[1] == cli_yxx(cli)[1])
+#define RouteNumEqual(num1, num2) ((num1)[0] == (num2)[0] && (num1)[1] == (num2)[1])
+/* macro for numnick compare with client */
+#define RouteLinkNumIs(num, cli) ((num)[0] == cli_yxx(cli)[0] && (num)[1] == cli_yxx(cli)[1])
 /* macro for numnick copy from client */
 #define RouteLinkNumSet(num, cli) (memcpy(num, cli_yxx(cli), 2))
 
 /* routing functions */
-extern int update_server_route(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost, const char *numpath);
-extern void denounce_server_route(struct Client *cptr, struct Client *server, const char *parentnum, const char *numpath);
-extern void send_announce_to_neighbours_buf(struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath);
-extern void send_announce_to_one_buf(struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost, unsigned int denounce, const char *numpath);
+extern void announce_server_link(struct Client *cptr, struct Client *server, struct Client *uplink, struct Client *parent, unsigned int linkcost);
+extern void denounce_server_route(struct Client *cptr, struct Client *server, const char *uplinknum, const char *parentnum, int link_denounce);
+extern void send_announce_to_neighbours_buf(struct Client *skip1, struct Client *skip2, const char *servernum, const char *parentnum, unsigned int linkcost, int link_denounce);
+extern void send_announce_to_one_buf(struct Client *client, const char *servernum, const char *parentnum, unsigned int linkcost, int link_denounce);
 extern void flush_link_announcements();
 extern void remove_uplink_routes(struct Client *uplink);
 extern void free_server_routes(struct Client *uplink);

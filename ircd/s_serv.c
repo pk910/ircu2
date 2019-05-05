@@ -118,13 +118,15 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
   struct Client* acptr = 0;
   const char*    inpath;
   int            i;
+  char linknums[80];
+  int  linknumpos;
 
   assert(0 != cptr);
   assert(0 != cli_local(cptr));
 
   inpath = cli_name(cptr);
 
-  if (IsUnknown(cptr) || (announce_link & 0x02)) {
+  if ((announce_link & 0x02)) {
     if (aconf->passwd[0])
       sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
     /*
@@ -226,9 +228,6 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
    */
 
   for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
-    /* acptr->from == acptr for acptr == cptr */
-    if (cli_from(acptr) == cptr)
-      continue;
     if (IsServer(acptr)) {
       struct RouteList *route;
       const char* protocol_str;
@@ -241,10 +240,28 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
       
-      if(!(announce_link & 0x01) && (route = cli_serv(acptr)->routes)) {
-        send_announce_to_one_buf(cptr, cli_yxx(acptr), 
-          route->link_parent, cli_linkcost(acptr), 0, route->link_numpath);
-      } else {
+      if(!(announce_link & 0x01)) {
+        route = cli_serv(acptr)->routes;
+        assert(0 != route);
+        
+        /* notify about all links we have to this server (but send only the ones with lowest cost) */
+        linknumpos = 0;
+        do {
+          for(i = 0; i < linknumpos; i += 2) {
+            if(RouteNumEqual(linknums+i, route->link_parent))
+              break;
+          }
+          if(i < linknumpos)
+            continue;
+          
+          linknums[linknumpos++] = route->link_parent[0];
+          linknums[linknumpos++] = route->link_parent[1];
+          
+          send_announce_to_one_buf(cptr, cli_yxx(acptr), 
+            route->link_parent, route->link_cost, 0);
+        } while(route = route->next);
+        
+      } else if (cli_from(acptr) != cptr) {
         sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
           "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
           cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
@@ -252,10 +269,6 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
           IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
           IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
           cli_linkcost(acptr), cli_info(acptr));
-        if(IsRouter(cptr) && (route = cli_serv(acptr)->routes)) {
-          send_announce_to_one_buf(cptr, cli_yxx(acptr), 
-            route->link_parent, cli_linkcost(acptr), 0, route->link_numpath);
-        }
       }
     }
   }

@@ -197,13 +197,20 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
     return exit_client_msg(cptr, cptr, &me,
                            "Server %s already connected locally!", host);
   }
+  /*
+   * Check if the server tries to create a link loop
+   */
+  else if (IsRouter(acptr) && RouteLinkNumIs(numnick, acptr)) {
+    if(!looplink)
+      return exit_client_msg(cptr, cptr, &me, "loop link");
+  }
   /* 
    * There is another server with the same numeric connecting.
    * We don't want to kill the link that was last /connected,
    * but we neither want to kill a good (old) link.
    * Therefor we kill the second youngest link.
    */
-  else if (!IsRouter(acptr) || !looplink || numnick[0] != acptr->cli_yxx[0] || numnick[1] != acptr->cli_yxx[1])
+  else
   {
     struct Client* c2ptr = 0;
     struct Client* c3ptr = acptr;
@@ -686,7 +693,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return ret;
   
   announce_link = 0;
-  if(IsUnknown(cptr))
+  if(IsServerPort(cptr))
     announce_link |= 0x02;
   
   if(acptr) {
@@ -724,7 +731,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if(!linkcost)
     linkcost = 1;
   
-  update_server_route(acptr, acptr, acptr, &me, linkcost, "");
+  announce_server_link(acptr, acptr, acptr, &me, linkcost);
   ret = server_estab(acptr, aconf, announce_link);
   
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
@@ -814,20 +821,11 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   else
     linkcost = 0;
   linkcost += con_linkcost(cli_connect(cptr));
-  
-  char numbuf[128];
-  int numbufpos = 0;
-  
-  numbuf[numbufpos++] = parv[6][0];
-  numbuf[numbufpos++] = parv[6][1];
-  bcptr = sptr;
-  do {
-    numbuf[numbufpos++] = cli_yxx(bcptr)[0];
-    numbuf[numbufpos++] = cli_yxx(bcptr)[1];
-  } while((bcptr = cli_serv(bcptr)->up) && bcptr != &me);
-  numbuf[numbufpos] = 0;
 
   if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
+    /* server is already known - use this message as link announcement */
+    announce_server_link(cptr, acptr, cptr, sptr, linkcost);
+    
     /* we already know the server, so do not continue processing here */
     return 0;
   }
@@ -867,6 +865,8 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     SetFlag(acptr, FLAG_TS8);
   add_client_to_list(acptr);
   hAddClient(acptr);
+  
+  announce_server_link(cptr, acptr, cptr, sptr, linkcost);
   
   if (*parv[5] == 'J')
   {
