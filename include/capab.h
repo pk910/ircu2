@@ -33,6 +33,7 @@
 #define CAPFL_STICKY    0x0008  /**< Cap may not be cleared once set */
 
 #define CAPLIST	\
+	_CAP(STARTTLS, 0, "tls"), \
 	_CAP(USERPFX, 0, "undernet.org/userpfx")
 
 /** Client capabilities */

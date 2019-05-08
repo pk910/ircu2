@@ -502,5 +502,5 @@ extern const struct Numeric* get_error_numeric(int err);
 
 #define ERR_STARTTLS         691  /* Nefarious & Undernet extension (STARTTLS) */
 
-#define ERR_LASTERROR        568
+#define ERR_LASTERROR        691
 #endif /* INCLUDED_numeric_h */

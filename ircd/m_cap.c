@@ -145,7 +145,7 @@ send_caplist(struct Client *sptr, const struct CapSet *set,
   int i, loc, len, flags, pfx_len;
 
   /* set up the buffer for the final LS message... */
-  mb = msgq_make(sptr, "%:#C " MSG_CAP " %s :", &me, subcmd);
+  mb = msgq_make(sptr, "%:#C " MSG_CAP " * %s :", &me, subcmd);
 
   for (i = 0, loc = 0; i < CAPAB_LIST_LEN; i++) {
     flags = capab_list[i].flags;

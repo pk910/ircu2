@@ -591,6 +591,7 @@ connectblock: CONNECT
    MyFree(hub_limit);
    MyFree(sslcfg.certfp);
    MyFree(sslcfg.certfile);
+   MyFree(sslcfg.keyfile);
    MyFree(sslcfg.cafile);
    MyFree(sslcfg.ciphers);
    MyFree(sslcfg.options);
@@ -608,7 +609,7 @@ connectitem: connectname | connectpass | connectclass | connecthost
               | connectport | connectvhost | connectleaf | connecthub
               | connecthublimit | connectmaxhops | connectcost | connectauto
               | connectssl | connectsslverifyca | connectsslverifycert
-              | connectsslcertfile | connectsslcafile | connectsslciphers
+              | connectsslkeyfile | connectsslcertfile | connectsslcafile | connectsslciphers
               | connectssloptions | connectsslprotocol | connectsslminprotocol
               | connectsslmaxprotocol | connectsslcurves;
 connectname: NAME '=' QSTRING ';'
@@ -671,7 +672,7 @@ connectssl: SSL '=' YES ';' { flags |= CONF_USESSL; }
 connectsslverifyca: SSL_VERIFY_CA '=' YES ';'
 {
   sslcfg.flags |= CONF_VERIFYCA;
-} | WEBIRC '=' NO ';'
+} | SSL_VERIFY_CA '=' NO ';'
 {
   sslcfg.flags &= ~CONF_VERIFYCA;
 };
@@ -685,6 +686,11 @@ connectsslcertfile: SSL_CERTFILE '=' QSTRING ';'
 {
   MyFree(sslcfg.certfile);
   sslcfg.certfile = $3;
+};
+connectsslkeyfile: SSL_KEYFILE '=' QSTRING ';'
+{
+  MyFree(sslcfg.keyfile);
+  sslcfg.keyfile = $3;
 };
 connectsslcafile: SSL_CAFILE '=' QSTRING ';'
 {
@@ -1039,14 +1045,14 @@ portsslcurves: SSL_CURVES '=' QSTRING ';'
 portsslverifypeer: SSL_VERIFY_PEER '=' YES ';'
 {
   sslcfg.flags |= CONF_VERIFYPEER;
-} | WEBIRC '=' NO ';'
+} | SSL_VERIFY_PEER '=' NO ';'
 {
   sslcfg.flags &= ~CONF_VERIFYPEER;
 };
 portsslverifyca: SSL_VERIFY_CA '=' YES ';'
 {
   sslcfg.flags |= CONF_VERIFYCA;
-} | WEBIRC '=' NO ';'
+} | SSL_VERIFY_CA '=' NO ';'
 {
   sslcfg.flags &= ~CONF_VERIFYCA;
 };
