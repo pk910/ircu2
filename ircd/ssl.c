@@ -64,6 +64,7 @@ struct SSLPendingConections {
 
 struct SSLPendingConections *firstPendingConection = NULL;
 int ssl_is_initialized = 0;
+int ssl_conptr_index, ssl_cliptr_index, ssl_listenerptr_index;
 
 static void ssl_init() {
   if(ssl_is_initialized)
@@ -72,6 +73,9 @@ static void ssl_init() {
   SSL_library_init();
   OpenSSL_add_all_algorithms(); /* load & register all cryptos, etc. */
   SSL_load_error_strings();
+  ssl_conptr_index = SSL_get_ex_new_index(0, "connection pointer index", NULL, NULL, NULL);
+  ssl_cliptr_index = SSL_get_ex_new_index(0, "client pointer index", NULL, NULL, NULL);
+  ssl_listenerptr_index = SSL_get_ex_new_index(0, "listener pointer index", NULL, NULL, NULL);
 }
 
 static void ssl_free_config(struct SSLConf *target) {
@@ -216,116 +220,47 @@ static const char *ssl_cert_fingerprint(X509* cert) {
   return hex;
 }
 
-static int ssl_verify_cert_is_signed(X509 *cert, X509 *cacert, const char **errmsg) {
-  int res;
-  X509_STORE *store;
-  X509_STORE_CTX *ctx;
-
-  store = X509_STORE_new();
-  X509_STORE_add_cert(store, cacert);
-
-  ctx = X509_STORE_CTX_new();
-  X509_STORE_CTX_init(ctx, store, cert, NULL);
-
-  res = X509_verify_cert(ctx);
-  if(res <= 0 && errmsg) {
-    int err = X509_STORE_CTX_get_error(ctx);
-    *errmsg = X509_verify_cert_error_string(err);
-  }
-  if(res < 0)
-    res = 0;
+static int ssl_verify_peer_certificate(int preverify_ok, X509_STORE_CTX *x509ctx) {
+  SSL *ssl = X509_STORE_CTX_get_ex_data(x509ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+  SSL_CTX *sslctx = SSL_get_SSL_CTX(ssl);
   
-  X509_STORE_CTX_free(ctx);
-  X509_STORE_free(store);
-  return res;
-}
-
-static int ssl_verify_peer_certificate(struct SSLListener *listener, X509 *peer_cert, const char **errmsg) {
-  int valid = 1;
+  struct SSLListener *listener = SSL_CTX_get_ex_data(sslctx, ssl_listenerptr_index);
+  X509 *peer_cert = SSL_get_peer_certificate(ssl);
   
-  if(valid && (listener->conf.flags & CONF_VERIFYCA)) {
-    if(!listener->cacert) {
-      if(!listener->conf.cafile) {
-        if(errmsg)
-          *errmsg = "CA verification failed: cafile not set.";
-        valid = 0;
-      }
-      if(!(listener->cacert = ssl_load_certificate(listener->conf.cafile))) {
-        if(errmsg)
-          *errmsg = "CA verification failed: could not load cafile.";
-        valid = 0;
-      }
-    }
-    if(!ssl_verify_cert_is_signed(peer_cert, listener->cacert, errmsg))
-      valid = 0;
-  }
+  int valid = (listener->conf.flags & CONF_VERIFYCA) ? preverify_ok : 1;
   if(valid && (listener->conf.flags & CONF_VERIFYCERT)) {
-    if(!listener->conf.certfp || !*listener->conf.certfp) {
-      if(errmsg)
-        *errmsg = "CertFP verification failed: fingerprint not set.";
+    if(!listener->conf.certfp || !*listener->conf.certfp)
       valid = 0;
-    }
-    else if(strcmp(listener->conf.certfp, ssl_cert_fingerprint(peer_cert))) {
-      if(errmsg)
-        *errmsg = "CertFP verification failed: fingerprint does not match.";
+    else if(strcmp(listener->conf.certfp, ssl_cert_fingerprint(peer_cert)))
       valid = 0;
-    }
   }
   
   return valid;
 }
-static int ssl_verify_server_certificate(struct SSLOutConnection *connection, X509 *server_cert, const char **errmsg) {
-  int valid = 1;
+static int ssl_verify_server_certificate(int preverify_ok, X509_STORE_CTX *x509ctx) {
+  SSL *ssl = X509_STORE_CTX_get_ex_data(x509ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
   
-  if(valid && (connection->conf.flags & CONF_VERIFYCA)) {
-    if(!connection->cacert) {
-      if(!connection->conf.cafile) {
-        if(errmsg)
-          *errmsg = "CA verification failed: cafile not set.";
-        valid = 0;
-      }
-      if(!(connection->cacert = ssl_load_certificate(connection->conf.cafile))) {
-        if(errmsg)
-          *errmsg = "CA verification failed: could not load cafile.";
-        valid = 0;
-      }
-    }
-    if(!ssl_verify_cert_is_signed(server_cert, connection->cacert, errmsg))
-      valid = 0;
-  }
+  struct SSLOutConnection *connection = SSL_get_ex_data(ssl, ssl_conptr_index);
+  X509 *server_cert = SSL_get_peer_certificate(ssl);
+  
+  int valid = (connection->conf.flags & CONF_VERIFYCA) ? preverify_ok : 1;
   if(valid && (connection->conf.flags & CONF_VERIFYCERT)) {
-    if(!connection->conf.certfp || !*connection->conf.certfp) {
-      if(errmsg)
-        *errmsg = "CertFP verification failed: fingerprint not set.";
+    if(!connection->conf.certfp || !*connection->conf.certfp) 
       valid = 0;
-    }
-    else if(strcmp(connection->conf.certfp, ssl_cert_fingerprint(server_cert))) {
-      if(errmsg)
-        *errmsg = "CertFP verification failed: fingerprint does not match.";
+    else if(strcmp(connection->conf.certfp, ssl_cert_fingerprint(server_cert)))
       valid = 0;
-    }
   }
   
   return valid;
 }
 
 static int ssl_complete_client_outgoing(struct SSLOutConnection *connection, struct Client *cptr) {
-  const char *errmsg;
-  if(!ssl_verify_server_certificate(connection, SSL_get_peer_certificate(connection->session), &errmsg)) {
-    
-    return -1;
-  }
   if(!completed_connection(cptr))
     return -1;
   return 0;
 }
 
 static int ssl_complete_client_incoming(struct SSLConnection *connection, struct SSLListener *listener, struct Client *cptr) {
-  const char *errmsg;
-  if(!ssl_verify_peer_certificate(listener, SSL_get_peer_certificate(connection->session), &errmsg)) {
-    
-    return -1;
-  }
   if(!FlagHas(&connection->flags, SSLFLAG_STARTTLS))
     start_auth(cptr);
   return 0;
@@ -398,6 +333,7 @@ struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *loc
   if(!connection->context) {
     goto ssl_create_connect_failed;
   }
+  SSL_CTX_set_ex_data(connection->context, ssl_listenerptr_index, 0);
   
   ssl_apply_ctx_config(connection->context, &connection->conf);
   if(connection->conf.certfile && connection->conf.keyfile) {
@@ -415,10 +351,24 @@ struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *loc
     }
   }
   
+  SSL_CTX_set_verify(connection->context, SSL_VERIFY_PEER, ssl_verify_server_certificate);
+  if((connection->conf.flags & CONF_VERIFYCA)) {
+    if (!connection->conf.cafile) {
+      goto ssl_create_connect_failed;
+    }
+    
+    if (SSL_CTX_load_verify_locations(connection->context, connection->conf.cafile, NULL) <= 0) {
+      goto ssl_create_connect_failed;
+    }
+  }
+  
   connection->session = SSL_new(connection->context);
   if(!connection->session) {
     goto ssl_create_connect_failed;
   }
+  SSL_set_ex_data(connection->session, ssl_conptr_index, connection);
+  SSL_set_ex_data(connection->session, ssl_cliptr_index, data);
+  
   if(!SSL_set_fd(connection->session, fd)) {
     goto ssl_create_connect_failed;
   }
@@ -455,6 +405,7 @@ struct SSLListener *ssl_create_listener(struct SSLConf *localcfg) {
   if(!listener->context) {
     goto ssl_create_listener_failed;
   }
+  SSL_CTX_set_ex_data(listener->context, ssl_listenerptr_index, listener);
   
   ssl_merge_config(&listener->conf, &conf_get_local()->ssl);
   ssl_merge_cert_config(&listener->conf, &conf_get_local()->ssl);
@@ -484,12 +435,19 @@ struct SSLListener *ssl_create_listener(struct SSLConf *localcfg) {
   if(!SSL_CTX_check_private_key(listener->context)) {
     goto ssl_create_listener_failed;
   }
-  /* load cafile */
-  if(cafile && cafile[0] && SSL_CTX_load_verify_locations(listener->context, cafile, NULL) <= 0) {
-    goto ssl_create_listener_failed;
+  
+  if((listener->conf.flags & CONF_VERIFYCA)) {
+    if (!cafile) {
+      goto ssl_create_listener_failed;
+    }
+    if (SSL_CTX_load_verify_locations(listener->context, cafile, NULL) <= 0) {
+      goto ssl_create_listener_failed;
+    }
   }
   
   ssl_apply_ctx_config(listener->context, &listener->conf);
+  if((listener->conf.flags & (CONF_VERIFYCA | CONF_VERIFYPEER)))
+    SSL_CTX_set_verify(listener->context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, ssl_verify_peer_certificate);
   
   FlagSet(&listener->flags, SSLFLAG_READY);
   return listener;
@@ -531,6 +489,9 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   if(!connection->session) {
     goto ssl_start_handshake_listener_failed;
   }
+  SSL_set_ex_data(connection->session, ssl_conptr_index, connection);
+  SSL_set_ex_data(connection->session, ssl_cliptr_index, data);
+  
   if(!SSL_set_fd(connection->session, fd)) {
     goto ssl_start_handshake_listener_failed;
   }
@@ -578,6 +539,8 @@ int ssl_client_starttls(struct Client *client) {
   if(!connection->session) {
     goto ssl_client_starttls_failed;
   }
+  SSL_set_ex_data(connection->session, ssl_conptr_index, connection);
+  SSL_set_ex_data(connection->session, ssl_cliptr_index, client);
   if(!SSL_set_fd(connection->session, cli_fd(client))) {
     goto ssl_client_starttls_failed;
   }
@@ -601,6 +564,7 @@ int ssl_client_starttls(struct Client *client) {
   firstPendingConection = pending;
   
   pending->data = client;
+  con_ssl(connect) = connection;
   
   ssl_handshake_incoming(connection);
   return 1;
@@ -737,7 +701,8 @@ const char *ssl_get_current_cipher(struct SSLConnection *connection) {
 }
 
 const char *ssl_get_fingerprint(struct SSLConnection *connection) { 
-  return NULL; 
+  X509* cert = SSL_get_peer_certificate(connection->session);
+  return ssl_cert_fingerprint(cert); 
 }
 
 #else
