@@ -76,6 +76,14 @@ struct Client;
 #define TOK_SERVER              "S"
 #define CMD_SERVER		MSG_SERVER, TOK_SERVER
 
+#define MSG_LINKCHANGE		"LINKCHANGE"
+#define TOK_LINKCHANGE   "LC"
+#define CMD_LINKCHANGE  MSG_LINKCHANGE, TOK_LINKCHANGE
+
+#define MSG_NETROUTE		"NETROUTE"
+#define TOK_NETROUTE		"NR"
+#define CMD_NETROUTE		MSG_NETROUTE, TOK_NETROUTE
+
 #define MSG_LIST                "LIST"          /* LIST */
 #define TOK_LIST                "LIST"
 #define CMD_LIST		MSG_LIST, TOK_LIST

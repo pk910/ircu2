@@ -46,6 +46,7 @@
 #include "s_debug.h"
 #include "s_misc.h"
 #include "s_numeric.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "struct.h"
@@ -301,6 +302,20 @@ struct Message msgtab[] = {
     0, MAXPARA, MFLG_SLOW | MFLG_UNREG, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { mr_server, m_registered, ms_server, m_registered, m_ignore }
+  },
+  {
+    MSG_LINKCHANGE,
+    TOK_LINKCHANGE,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_linkchange, m_ignore, m_ignore }
+  },
+  {
+    MSG_NETROUTE,
+    TOK_NETROUTE,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_netroute, m_ignore, m_ignore }
   },
   {
     MSG_SQUIT,
@@ -1062,6 +1077,9 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
           buffer, cli_name(cptr)));
       return 0;
     }
+    
+    while (*ch == ' ')
+      ch++;
   }
   else
   {
@@ -1138,8 +1156,11 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
 
     /* Let para[0] point to the name of the sender */
     para[0] = cli_name(from);
+    
+    while (*ch == ' ')
+      ch++;
 
-    if (cli_from(from) != cptr)
+    if (cli_from(from) != cptr && !check_received_from_server_route(cptr, from, ch))
     {
       ServerStats->is_wrdi++;
       Debug((DEBUG_NOTICE, "Fake direction: Message (%s) coming from (%s)",
@@ -1147,9 +1168,6 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
       return 0;
     }
   }
-
-  while (*ch == ' ')
-    ch++;
   if (*ch == '\0')
   {
     ServerStats->is_empt++;

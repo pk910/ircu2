@@ -74,6 +74,7 @@
   int yylex(void);
   /* Now all the globals we need :/... */
   int tping, tconn, maxlinks, sendq, port, invert, stringno, flags;
+  unsigned int linkcost;
   char *name, *pass, *host, *ip, *username, *origin, *hub_limit;
   struct SSLConf sslcfg;
   struct SLink *hosts;
@@ -547,6 +548,7 @@ classusermode: USERMODE '=' QSTRING ';'
 connectblock: CONNECT
 {
  flags = CONF_AUTOCONNECT;
+ linkcost = 0;
  memset(&sslcfg, 0, sizeof(sslcfg));
 } '{' connectitems '}' ';'
 {
@@ -576,6 +578,7 @@ connectblock: CONNECT
     */
    aconf->maximum = (hub_limit != NULL && maxlinks == 0) ? 65535 : maxlinks;
    aconf->hub_limit = hub_limit;
+   aconf->linkcost = linkcost;
    aconf->flags = flags;
    memcpy(&aconf->ssl, &sslcfg, sizeof(sslcfg));
    lookup_confhost(aconf);
@@ -603,7 +606,7 @@ connectblock: CONNECT
 connectitems: connectitem connectitems | connectitem;
 connectitem: connectname | connectpass | connectclass | connecthost
               | connectport | connectvhost | connectleaf | connecthub
-              | connecthublimit | connectmaxhops | connectauto
+              | connecthublimit | connectmaxhops | connectcost | connectauto
               | connectssl | connectsslverifyca | connectsslverifycert
               | connectsslcertfile | connectsslcafile | connectsslciphers
               | connectssloptions | connectsslprotocol | connectsslminprotocol
@@ -656,6 +659,10 @@ connecthublimit: HUB '=' QSTRING ';'
 connectmaxhops: MAXHOPS '=' expr ';'
 {
   maxlinks = $3;
+};
+connectcost: COST '=' expr ';'
+{
+  linkcost = $3;
 };
 connectauto: AUTOCONNECT '=' YES ';' { flags |= CONF_AUTOCONNECT; }
  | AUTOCONNECT '=' NO ';' { flags &= ~CONF_AUTOCONNECT; };

@@ -93,6 +93,7 @@
 #include "match.h"
 #include "msg.h"
 #include "numeric.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "s_serv.h"
 #include "send.h"
@@ -108,14 +109,16 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
   static char prompt[64];
   struct DLink *lp;
   char *p = prompt + prompt_length;
-  int cnt = 0;
+  int cnt, alp;
+  struct RouteList *linkinfo;
   
   *p = '\0';
   if (prompt_length > 60)
     send_reply(cptr, RPL_MAPMORE, prompt, cli_name(server));
   else
   {
-    char lag[512];
+    char lag[128];
+    char altlinks[298];
     if (cli_serv(server)->lag>10000)
       lag[0]=0;
     else if (cli_serv(server)->lag<0)
@@ -128,9 +131,25 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
       chr = "!";
     else
       chr = "";
-    send_reply(cptr, RPL_MAP, prompt, chr, cli_name(server),
-               lag, (server == &me) ? UserStats.local_clients :
-                                      cli_serv(server)->clients);
+    
+    alp = 0;
+    if((linkinfo = cli_serv(server)->routes)) {
+      cnt = 0;
+      while((linkinfo = linkinfo->next) && alp < 250) {
+        if(!alp)
+          alp += sprintf(altlinks, ", alt: ");
+        alp += sprintf(altlinks + alp, "%s%.2s%.2s:%u", (cnt++ ? "," : ""), linkinfo->link_client, linkinfo->link_parent, linkinfo->link_cost);
+      }
+    }
+    altlinks[alp] = 0;
+    
+    send_reply(cptr, RPL_MAP, prompt, cli_yxx(server), chr, cli_name(server),
+               lag, (server == &me) ? UserStats.local_clients : cli_serv(server)->clients, 
+               cli_linkcost(server), altlinks, 
+               (cli_serv(server)->own_route ? cli_serv(server)->own_route->route_data : ""),
+               (cli_serv(server)->fwd_route ? cli_serv(server)->fwd_route->route_src : ""), 
+               (cli_serv(server)->fwd_route ? cli_serv(server)->fwd_route->route_data : "")
+              );
   }
   if (prompt_length > 0)
   {
@@ -141,6 +160,7 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
   if (prompt_length > 60)
     return;
   strcpy(p, "|-");
+  cnt = 0;
   for (lp = cli_serv(server)->down; lp; lp = lp->next)
     if (match(mask, cli_name(lp->value.cptr)))
       ClrFlag(lp->value.cptr, FLAG_MAP);

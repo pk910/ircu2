@@ -141,7 +141,7 @@ int m_links(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     if (!BadPtr(mask) && match(mask, cli_name(acptr)))
       continue;
     send_reply(sptr, RPL_LINKS, cli_name(acptr), cli_name(cli_serv(acptr)->up),
-        cli_hopcount(acptr), cli_serv(acptr)->prot,
+        cli_hopcount(acptr), cli_linkcost(acptr), cli_serv(acptr)->prot,
         ((cli_info(acptr))[0] ? cli_info(acptr) : "(Unknown Location)"));
   }
 

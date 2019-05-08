@@ -33,16 +33,17 @@ struct StatDesc;
 /*
  * defined debugging levels
  */
-#define DEBUG_FATAL   0  /**< fatal error */
-#define DEBUG_ERROR   1  /**< report_error() and other errors that are found */
-#define DEBUG_NOTICE  3  /**< somewhat useful, but non-critical, messages */
-#define DEBUG_DNS     4  /**< used by all DNS related routines - a *lot* */
-#define DEBUG_INFO    5  /**< general useful info */
-#define DEBUG_SEND    7  /**< everything that is sent out */
-#define DEBUG_DEBUG   8  /**< everything that is received */ 
-#define DEBUG_MALLOC  9  /**< malloc/free calls */
-#define DEBUG_LIST   10  /**< debug list use */
-#define DEBUG_ENGINE 11  /**< debug event engine; can dump gigabyte logs */
+#define DEBUG_FATAL   0x0001  /**< fatal error */
+#define DEBUG_ERROR   0x0002  /**< report_error() and other errors that are found */
+#define DEBUG_NOTICE  0x0004  /**< somewhat useful, but non-critical, messages */
+#define DEBUG_DNS     0x0008  /**< used by all DNS related routines - a *lot* */
+#define DEBUG_INFO    0x0010  /**< general useful info */
+#define DEBUG_SEND    0x0020  /**< everything that is sent out */
+#define DEBUG_DEBUG   0x0040  /**< everything that is received */ 
+#define DEBUG_MALLOC  0x0080  /**< malloc/free calls */
+#define DEBUG_LIST    0x0100  /**< debug list use */
+#define DEBUG_ENGINE  0x0200  /**< debug event engine; can dump gigabyte logs */
+#define DEBUG_PROTO   0x0400  /**< debug protocol (print incoming & outgoing messages) */
 
 /*
  * proto types

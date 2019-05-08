@@ -44,17 +44,6 @@
 #define MB_BASE_SHIFT	5 /**< Log2 of smallest message body to allocate. */
 #define MB_MAX_SHIFT	9 /**< Log2 of largest message body to allocate. */
 
-/** Buffer for a single message. */
-struct MsgBuf {
-  struct MsgBuf *next;		/**< next msg in global queue */
-  struct MsgBuf **prev_p;	/**< what points to us in linked list */
-  struct MsgBuf *real;		/**< the actual MsgBuf we're attaching */
-  unsigned int ref;		/**< reference count */
-  unsigned int length;		/**< length of message */
-  unsigned int power;		/**< size of buffer (power of 2) */
-  char msg[1];			/**< the message */
-};
-
 /** Return allocated length of the buffer of \a buf. */
 #define bufsize(buf)	(1 << (buf)->power)
 

@@ -52,6 +52,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "struct.h"
@@ -109,40 +110,49 @@ int a_kills_b_too(struct Client *a, struct Client *b)
 /** Handle a connection that has sent a valid PASS and SERVER.
  * @param cptr New peer server.
  * @param aconf Connect block for \a cptr.
+ * @param announce_link Send burst (0x1) or handshake (0x2)
  * @return Zero.
  */
-int server_estab(struct Client *cptr, struct ConfItem *aconf)
+int server_estab(struct Client *cptr, struct ConfItem *aconf, int announce_link)
 {
   struct Client* acptr = 0;
   const char*    inpath;
   int            i;
+  char linknums[80];
+  int  linknumpos;
 
   assert(0 != cptr);
   assert(0 != cli_local(cptr));
 
   inpath = cli_name(cptr);
 
-  if (IsUnknown(cptr)) {
+  if ((announce_link & 0x02)) {
     if (aconf->passwd[0])
       sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
     /*
      *  Pass my info to the new server
      */
-    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
+    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6%s 0 :%s",
 		  cli_name(&me), cli_serv(&me)->timestamp,
 		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
-		  feature_bool(FEAT_HUB) ? "h" : "",
+		  feature_bool(FEAT_HUB) ? "h" : "", (announce_link & 0x01) ? "r" : "R",
 		  *(cli_info(&me)) ? cli_info(&me) : "IRCers United");
   }
 
   det_confs_butmask(cptr, CONF_SERVER | CONF_UWORLD);
 
-  if (!IsHandshake(cptr))
+  if((announce_link & 0x01)) {
+    if (IsHandshake(cptr))
+      add_client_to_list(cptr);
     hAddClient(cptr);
+    Count_unknownbecomesserver(UserStats);
+    
+    cli_serv(cptr)->up = &me;
+    cli_serv(cptr)->updown = add_dlink(&(cli_serv(&me))->down, cptr);
+  }
+  
   SetServer(cptr);
   cli_handler(cptr) = SERVER_HANDLER;
-  Count_unknownbecomesserver(UserStats);
-  SetBurst(cptr);
 
 /*    nextping = CurrentTime; */
 
@@ -166,37 +176,42 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
   }
 
   sendto_opmask_butone(acptr, SNO_OLDSNO, "Link with %s established.", inpath);
-  cli_serv(cptr)->up = &me;
-  cli_serv(cptr)->updown = add_dlink(&(cli_serv(&me))->down, cptr);
   sendto_opmask_butone(0, SNO_NETWORK, "Net junction: %s %s", cli_name(&me),
                        cli_name(cptr));
-  SetJunction(cptr);
-  /*
-   * Old sendto_serv_but_one() call removed because we now
-   * need to send different names to different servers
-   * (domain name matching) Send new server to other servers.
-   */
-  for (i = 0; i <= HighestFd; i++)
-  {
-    if (!(acptr = LocalClientArray[i]) || !IsServer(acptr) ||
-        acptr == cptr || IsMe(acptr))
-      continue;
-    if (!match(cli_name(&me), cli_name(cptr)))
-      continue;
-    sendcmdto_one(&me, CMD_SERVER, acptr,
-		  "%s 2 0 %Tu J%02u %s%s +%s%s%s :%s", cli_name(cptr),
-		  cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
-		  IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
-		  IsIPv6(cptr) ? "6" : "", cli_info(cptr));
+  
+  if((announce_link & 0x01)) {
+    /*
+     * Old sendto_serv_but_one() call removed because we now
+     * need to send different names to different servers
+     * (domain name matching) Send new server to other servers.
+     */
+    for (i = 0; i <= HighestFd; i++)
+    {
+      if (!(acptr = LocalClientArray[i]) || !IsServer(acptr) ||
+          acptr == cptr || IsMe(acptr))
+        continue;
+      if (!match(cli_name(&me), cli_name(cptr)))
+        continue;
+      
+      sendcmdto_one(&me, CMD_SERVER, acptr,
+          "%s 2 0 %Tu J%02u %s%s +%s%s%s%s %u :%s", cli_name(cptr),
+          cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
+          IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
+          IsIPv6(cptr) ? "6" : "", "r", cli_linkcost(cptr), cli_info(cptr));
+    }
+
+    /* send burst messages only if server wasn't already linked with the network via another client */
+    SetJunction(cptr);
+    SetBurst(cptr);
+    
+    /* Send these as early as possible so that glined users/juped servers can
+     * be removed from the network while the remote server is still chewing
+     * our burst.
+     */
+    gline_burst(cptr);
+    jupe_burst(cptr);
   }
-
-  /* Send these as early as possible so that glined users/juped servers can
-   * be removed from the network while the remote server is still chewing
-   * our burst.
-   */
-  gline_burst(cptr);
-  jupe_burst(cptr);
-
+  
   /*
    * Pass on my client information to the new server
    *
@@ -213,10 +228,8 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
    */
 
   for (acptr = &me; acptr; acptr = cli_prev(acptr)) {
-    /* acptr->from == acptr for acptr == cptr */
-    if (cli_from(acptr) == cptr)
-      continue;
     if (IsServer(acptr)) {
+      struct RouteList *route;
       const char* protocol_str;
 
       if (Protocol(acptr) > 9)
@@ -226,43 +239,71 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
-      sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
-		    "%s %d 0 %Tu %s%u %s%s +%s%s%s :%s", cli_name(acptr),
-		    cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
-		    protocol_str, Protocol(acptr), NumServCap(acptr),
-		    IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
-		    IsIPv6(acptr) ? "6" : "", cli_info(acptr));
+      
+      if(!(announce_link & 0x01)) {
+        route = cli_serv(acptr)->routes;
+        assert(0 != route);
+        
+        /* notify about all links we have to this server (but send only the ones with lowest cost) */
+        linknumpos = 0;
+        do {
+          for(i = 0; i < linknumpos; i += 2) {
+            if(RouteNumEqual(linknums+i, route->link_parent))
+              break;
+          }
+          if(i < linknumpos)
+            continue;
+          
+          linknums[linknumpos++] = route->link_parent[0];
+          linknums[linknumpos++] = route->link_parent[1];
+          
+          send_announce_to_one_buf(cptr, cli_yxx(acptr), 
+            route->link_parent, route->link_cost, 0);
+        } while(route = route->next);
+        
+      } else if (cli_from(acptr) != cptr) {
+        sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
+          "%s %d 0 %Tu %s%u %s%s +%s%s%s%s %u :%s", cli_name(acptr),
+          cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
+          protocol_str, Protocol(acptr), NumServCap(acptr),
+          IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
+          IsIPv6(acptr) ? "6" : "", IsRouter(acptr) ? "r" : "",
+          cli_linkcost(acptr), cli_info(acptr));
+      }
     }
   }
 
-  for (acptr = &me; acptr; acptr = cli_prev(acptr))
-  {
-    /* acptr->from == acptr for acptr == cptr */
-    if (cli_from(acptr) == cptr)
-      continue;
-    if (IsUser(acptr))
+  if((announce_link & 0x01)) {
+    for (acptr = &me; acptr; acptr = cli_prev(acptr))
     {
-      char xxx_buf[25];
-      char *s = umode_str(acptr);
-      sendcmdto_one(cli_user(acptr)->server, CMD_NICK, cptr,
-		    "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
-		    cli_name(acptr), cli_hopcount(acptr) + 1, cli_lastnick(acptr),
-		    cli_user(acptr)->username, cli_user(acptr)->realhost,
-		    *s ? "+" : "", s, *s ? " " : "",
-		    iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf), IsIPv6(cptr)),
-		    NumNick(acptr), cli_info(acptr));
+      /* acptr->from == acptr for acptr == cptr */
+      if (cli_from(acptr) == cptr)
+        continue;
+      if (IsUser(acptr))
+      {
+        char xxx_buf[25];
+        char *s = umode_str(acptr);
+        sendcmdto_one(cli_user(acptr)->server, CMD_NICK, cptr,
+          "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
+          cli_name(acptr), cli_hopcount(acptr) + 1, cli_lastnick(acptr),
+          cli_user(acptr)->username, cli_user(acptr)->realhost,
+          *s ? "+" : "", s, *s ? " " : "",
+          iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf), IsIPv6(cptr)),
+          NumNick(acptr), cli_info(acptr));
+      }
     }
+    /*
+     * Last, send the BURST.
+     * (Or for 2.9 servers: pass all channels plus statuses)
+     */
+    {
+      struct Channel *chptr;
+      for (chptr = GlobalChannelList; chptr; chptr = chptr->next)
+        send_channel_modes(cptr, chptr);
+    }
+    sendcmdto_one(&me, CMD_END_OF_BURST, cptr, "");
   }
-  /*
-   * Last, send the BURST.
-   * (Or for 2.9 servers: pass all channels plus statuses)
-   */
-  {
-    struct Channel *chptr;
-    for (chptr = GlobalChannelList; chptr; chptr = chptr->next)
-      send_channel_modes(cptr, chptr);
-  }
-  sendcmdto_one(&me, CMD_END_OF_BURST, cptr, "");
+  
   return 0;
 }
 

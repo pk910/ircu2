@@ -1,7 +1,6 @@
 /*
- * IRC - Internet Relay Chat, ircd/m_version.c
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Computing Center
+ * IRC - Internet Relay Chat, ircd/m_netroute.c
+ * Copyright (C) 2010 Kevin L. Mitchell <klmitch@mit.edu>
  *
  * See file AUTHORS in IRC package for additional names of
  * the programmers.
@@ -82,42 +81,61 @@
 #include "config.h"
 
 #include "client.h"
-#include "hash.h"
 #include "ircd.h"
-#include "ircd_features.h"
+#include "ircd_alloc.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
-#include "ircd_snprintf.h"
 #include "ircd_string.h"
-#include "match.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
-#include "s_debug.h"
-#include "s_user.h"
+#include "s_routing.h"
 #include "send.h"
-#include "supported.h"
-#include "version.h"
 
-/* #include <assert.h> -- Now using assert in ircd_log.h */
+#include <string.h>
 
 /*
- * m_version - generic message handler
+ * ms_netroute - broadcast route announcement
  *
- *   parv[0] = sender prefix
- *   parv[1] = servername
+ * parv[0] = sender prefix
+ * parv[1] = source numnick
+ * parv[2] = route index
+ * parv[3] = route length / "+" if chunked
+ * parv[4] = route data (if length > 0)
  */
-int m_version(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+int ms_netroute(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if (hunt_server_cmd(sptr, CMD_VERSION, cptr, feature_int(FEAT_HIS_REMOTE),
-                                                           ":%C", 1,
-                                                           parc, parv)
-                      == HUNTED_ISME)
-  {
-    send_reply(sptr, RPL_VERSION, version, cli_name(&me), debug_serveropts());
-    if (MyUser(sptr))
-      send_supported(sptr);
+  if(parc < 4)
+    return need_more_params(sptr, "NETROUTE");
+  
+  struct Client* acptr;
+  if(!(acptr = FindNServer(parv[1])))
+    return 0;
+  
+  unsigned int routeidx = atoi(parv[2]);
+  if(cli_serv(acptr)->fwd_route && routeidx <= cli_serv(acptr)->fwd_route->route_idx && 
+    !(routeidx == 1 && cli_serv(acptr)->fwd_route->route_idx >= ROUTE_INDEX_ROLLOVER) // index overflow
+   ) {
+    return 0; // ignore - we already have a newer route from acptr
   }
-
+  
+  unsigned int routelen = atoi(parv[3]);
+  if(routelen > NN_MAX_SERVER) {
+    protocol_violation(cptr, "route too long.");
+    return 0;
+  }
+  
+  struct RouteInfo *netroute = MyCalloc(1, sizeof(struct RouteInfo));
+  netroute->route_idx = routeidx;
+  netroute->route_len = routelen;
+  
+  if(routelen > 0) {
+    int datalen = (routelen * 2) + 1;
+    netroute->is_ptrdata = 1;
+    netroute->route_data = MyMalloc(datalen);
+    memcpy(netroute->route_data, parv[4], datalen);
+  }
+  
+  update_server_netroute(acptr, cptr, netroute);
   return 0;
 }

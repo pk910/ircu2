@@ -55,6 +55,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_serv.h" /* max_client_count */
 #include "send.h"
 #include "ssl.h"
@@ -406,16 +407,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
   }
   else {
     struct Client *acptr = user->server;
-
-    if (cli_from(acptr) != cli_from(sptr))
-    {
-      sendcmdto_one(&me, CMD_KILL, cptr, "%C :%s (%s != %s[%s])",
-                    sptr, cli_name(&me), cli_name(user->server), cli_name(cli_from(acptr)),
-                    cli_sockhost(cli_from(acptr)));
-      SetFlag(sptr, FLAG_KILLED);
-      return exit_client_msg(cptr, sptr, &me, "NICK server wrong direction");
-    }
-    else if (HasFlag(acptr, FLAG_TS8))
+    if (HasFlag(acptr, FLAG_TS8))
       SetFlag(sptr, FLAG_TS8);
 
     /*
@@ -839,7 +831,7 @@ void send_umode_out(struct Client *cptr, struct Client *sptr,
   for (i = HighestFd; i >= 0; i--)
   {
     if ((acptr = LocalClientArray[i]) && IsServer(acptr) &&
-        (acptr != cptr) && (acptr != sptr) && *umodeBuf)
+        (acptr != cptr) && (acptr != sptr) && check_forward_to_server_route(sptr, acptr) && *umodeBuf)
       sendcmdto_one(sptr, CMD_MODE, acptr, "%s :%s", cli_name(sptr), umodeBuf);
   }
   if (cptr && MyUser(cptr))

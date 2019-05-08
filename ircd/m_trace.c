@@ -162,9 +162,8 @@ void do_trace(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
       acptr = next_client(GlobalClientList, tname);
     else
       acptr = cli_from(acptr);
-    send_reply(sptr, RPL_TRACELINK,
-	       version, debugmode, tname,
-	       acptr ? cli_name(cli_from(acptr)) : "<No_match>");
+    send_reply(sptr, RPL_TRACELINK, version, tname, 
+          acptr ? cli_name(cli_from(acptr)) : "<No_match>");
     return;
   }
 

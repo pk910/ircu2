@@ -45,6 +45,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_serv.h"
 #include "send.h"
 #include "userload.h"
@@ -104,8 +105,275 @@ enum lh_type {
   I_AM_NOT_HUB /**< I have another active server link but not FEAT_HUB. */
 };
 
-/** Check whether the introduction of a new server would cause a loop
- * or be disallowed by leaf and hub configuration directives.
+static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, 
+                      int hop, int junction, int looplink, enum lh_type *active_lh_line, struct Client** LHcptr)
+{
+  struct Client* acptr;
+  
+  /*
+   *  We want to find IsConnecting() and IsHandshake() too,
+   *  use FindClient().
+   *  The second finds collisions with numeric representation of existing
+   *  servers - these shouldn't happen anymore when all upgraded to 2.10.
+   *  -- Run
+   */
+  if (!(acptr = FindClient(host)) && !(numnick && (acptr = FindNServer(numnick))))
+    return 1;
+  
+  /*
+   *  This link is trying feed me a server that I already have
+   *  access through another path
+   *
+   *  Do not allow Uworld to do this.
+   *  Do not allow servers that are juped.
+   *  Do not allow servers that have older link timestamps
+   *    then this try.
+   *  Do not allow servers that use the same numeric as an existing
+   *    server, but have a different name.
+   *
+   *  If my ircd.conf sucks, I can try to connect to myself:
+   */
+  if (acptr == &me)
+    return exit_client_msg(cptr, cptr, &me, "nick collision with me (%s), check server number in M:?", host);
+  /*
+   * Detect wrong numeric.
+   */
+  if (0 != ircd_strcmp(cli_name(acptr), host))
+  {
+    sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
+        ":SERVER Numeric Collision: %s != %s",
+        cli_name(acptr), host);
+    return exit_client_msg(cptr, cptr, &me,
+        "NUMERIC collision between %s and %s."
+        " Is your server numeric correct ?", host, cli_name(acptr));
+  }
+  /*
+   *  Kill our try, if we had one.
+   */
+  if (IsConnecting(acptr) && MyConnect(cptr))
+  {
+    if (*active_lh_line == ALLOWED && exit_client(cptr, acptr, &me,
+        "Just connected via another link") == CPTR_KILLED)
+      return CPTR_KILLED;
+    
+    return 1;
+  }
+  /*
+   * Avoid other nick collisions...
+   * This is a doubtful test though, what else would it be
+   * when it has a server.name ?
+   */
+  else if (!IsServer(acptr) && !IsHandshake(acptr))
+    return exit_client_msg(cptr, cptr, &me,
+                           "Nickname %s already exists!", host);
+  /*
+   * Our new server might be a juped server,
+   * or someone trying abuse a second Uworld:
+   */
+  /* // TODO!
+  else if (IsServer(acptr) && (0 == ircd_strncmp(cli_info(acptr), "JUPE", 4) ||
+      find_conf_byhost(cli_confs(cptr), cli_name(acptr), CONF_UWORLD)))
+  {
+    if (!IsServer(sptr))
+      return exit_client(cptr, sptr, &me, cli_info(acptr));
+    sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
+        ":Received :%s SERVER %s from %s !?!",
+                          NumServ(cptr), host, cli_name(cptr));
+    return exit_new_server(cptr, sptr, host, timestamp, "%s", cli_info(acptr));
+  }
+  */
+  /*
+   * Of course we find the handshake this link was before :)
+   */
+  else if (IsHandshake(acptr) && acptr == cptr)
+    return 1;
+  /*
+   * Here we have a server nick collision...
+   * We're allowing loops in the network now, but 
+   * redundant local liks are not supported.
+   * So we need to check if the server is already connected locally.
+   */
+  else if(MyConnect(acptr)) {
+    return exit_client_msg(cptr, cptr, &me,
+                           "Server %s already connected locally!", host);
+  }
+  /*
+   * Check if the server tries to create a link loop
+   */
+  else if (IsRouter(acptr) && RouteLinkNumIs(numnick, acptr)) {
+    if(!looplink)
+      return exit_client_msg(cptr, cptr, &me, "loop link");
+  }
+  /* 
+   * There is another server with the same numeric connecting.
+   * We don't want to kill the link that was last /connected,
+   * but we neither want to kill a good (old) link.
+   * Therefor we kill the second youngest link.
+   */
+  else
+  {
+    struct Client* c2ptr = 0;
+    struct Client* c3ptr = acptr;
+    struct Client* ac2ptr;
+    struct Client* ac3ptr;
+
+    /* Search youngest link: */
+    for (ac3ptr = acptr; ac3ptr != &me; ac3ptr = cli_serv(ac3ptr)->up)
+      if (cli_serv(ac3ptr)->timestamp > cli_serv(c3ptr)->timestamp)
+        c3ptr = ac3ptr;
+    if (IsServer(sptr))
+    {
+      for (ac3ptr = sptr; ac3ptr != &me; ac3ptr = cli_serv(ac3ptr)->up)
+        if (cli_serv(ac3ptr)->timestamp > cli_serv(c3ptr)->timestamp)
+          c3ptr = ac3ptr;
+    }
+    if (timestamp > cli_serv(c3ptr)->timestamp)
+    {
+      c3ptr = 0;
+      c2ptr = acptr;          /* Make sure they differ */
+    }
+    /* Search second youngest link: */
+    for (ac2ptr = acptr; ac2ptr != &me; ac2ptr = cli_serv(ac2ptr)->up)
+      if (ac2ptr != c3ptr &&
+          cli_serv(ac2ptr)->timestamp >
+          (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
+        c2ptr = ac2ptr;
+    if (IsServer(sptr))
+    {
+      for (ac2ptr = sptr; ac2ptr != &me; ac2ptr = cli_serv(ac2ptr)->up)
+        if (ac2ptr != c3ptr &&
+            cli_serv(ac2ptr)->timestamp >
+            (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
+          c2ptr = ac2ptr;
+    }
+    if (c3ptr && timestamp > (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
+      c2ptr = 0;
+    /* If timestamps are equal, decide which link to break
+     *  by name.
+     */
+    if ((c2ptr ? cli_serv(c2ptr)->timestamp : timestamp) ==
+        (c3ptr ? cli_serv(c3ptr)->timestamp : timestamp))
+    {
+      const char *n2, *n2up, *n3, *n3up;
+      if (c2ptr)
+      {
+        n2 = cli_name(c2ptr);
+        n2up = MyConnect(c2ptr) ? cli_name(&me) : cli_name(cli_serv(c2ptr)->up);
+      }
+      else
+      {
+        n2 = host;
+        n2up = IsServer(sptr) ? cli_name(sptr) : cli_name(&me);
+      }
+      if (c3ptr)
+      {
+        n3 = cli_name(c3ptr);
+        n3up = MyConnect(c3ptr) ? cli_name(&me) : cli_name(cli_serv(c3ptr)->up);
+      }
+      else
+      {
+        n3 = host;
+        n3up = IsServer(sptr) ? cli_name(sptr) : cli_name(&me);
+      }
+      if (strcmp(n2, n2up) > 0)
+        n2 = n2up;
+      if (strcmp(n3, n3up) > 0)
+        n3 = n3up;
+      if (strcmp(n3, n2) > 0)
+      {
+        ac2ptr = c2ptr;
+        c2ptr = c3ptr;
+        c3ptr = ac2ptr;
+      }
+    }
+    /* Now squit the second youngest link: */
+    if (!c2ptr)
+      return exit_new_server(cptr, sptr, host, timestamp,
+                             "server %s already exists and is %ld seconds younger.",
+                             host, (long)cli_serv(acptr)->timestamp - (long)timestamp);
+    else if (cli_from(c2ptr) == cptr || IsServer(sptr))
+    {
+      struct Client *killedptrfrom = cli_from(c2ptr);
+      if (*active_lh_line != ALLOWED)
+      {
+        /*
+         * If the L: or H: line also gets rid of this link,
+         * we sent just one squit.
+         */
+        if (*LHcptr && a_kills_b_too(*LHcptr, c2ptr))
+          return 2;
+        /*
+         * If breaking the loop here solves the L: or H:
+         * line problem, we don't squit that.
+         */
+        if (cli_from(c2ptr) == cptr || (*LHcptr && a_kills_b_too(c2ptr, *LHcptr)))
+          *active_lh_line = ALLOWED;
+        else
+        {
+          /*
+           * If we still have a L: or H: line problem,
+           * we prefer to squit the new server, solving
+           * loop and L:/H: line problem with only one squit.
+           */
+          *LHcptr = 0;
+          return 2;
+        }
+      }
+      /*
+       * If the new server was introduced by a server that caused a
+       * Ghost less then 20 seconds ago, this is probably also
+       * a Ghost... (20 seconds is more then enough because all
+       * SERVER messages are at the beginning of a net.burst). --Run
+       */
+      if (CurrentTime - cli_serv(cptr)->ghost < 20)
+      {
+        killedptrfrom = cli_from(acptr);
+        if (exit_client(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
+          return CPTR_KILLED;
+      }
+      else if (exit_client_msg(cptr, c2ptr, &me,
+          "Loop <-- %s (new link is %ld seconds younger)", host,
+          (c3ptr ? (long)cli_serv(c3ptr)->timestamp : timestamp) -
+          (long)cli_serv(c2ptr)->timestamp) == CPTR_KILLED)
+        return CPTR_KILLED;
+      /*
+       * Did we kill the incoming server off already ?
+       */
+      if (killedptrfrom == cptr)
+        return 2;
+    }
+    else
+    {
+      if (*active_lh_line != ALLOWED)
+      {
+        if (*LHcptr && a_kills_b_too(*LHcptr, acptr))
+          return 2;
+        if (cli_from(acptr) == cptr || (*LHcptr && a_kills_b_too(acptr, *LHcptr)))
+          *active_lh_line = ALLOWED;
+        else
+        {
+          *LHcptr = 0;
+          return 2;
+        }
+      }
+      /*
+       * We can't believe it is a lagged server message
+       * when it directly connects to us...
+       * kill the older link at the ghost, rather then
+       * at the second youngest link, assuming it isn't
+       * a REAL loop.
+       */
+      if (ghost)
+        *ghost = CurrentTime;            /* Mark that it caused a ghost */
+      if (exit_client(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
+        return CPTR_KILLED;
+    }
+  }
+  return 2;
+}
+
+/** Check whether the introduction of a new server is disallowed by 
+ *  leaf and hub configuration directives.
  * @param[in] cptr Neighbor who sent the message.
  * @param[in] sptr Client that originated the message.
  * @param[out] ghost If non-NULL, receives ghost timestamp for new server.
@@ -118,13 +386,12 @@ enum lh_type {
  * was SQUIT.  1 if the new server is allowed.
  */
 static int
-check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, int hop, int junction)
+check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const char *host, const char *numnick, time_t timestamp, int hop, int junction, int looplink)
 {
-  struct Client* acptr;
   struct Client* LHcptr = NULL;
   struct ConfItem* lhconf;
   enum lh_type active_lh_line = ALLOWED;
-  int ii;
+  int ii, res;
 
   if (ghost)
     *ghost = 0;
@@ -162,255 +429,12 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
           break;
         }
   }
-
-  /*
-   *  We want to find IsConnecting() and IsHandshake() too,
-   *  use FindClient().
-   *  The second finds collisions with numeric representation of existing
-   *  servers - these shouldn't happen anymore when all upgraded to 2.10.
-   *  -- Run
-   */
-  while ((acptr = FindClient(host))
-         || (numnick && (acptr = FindNServer(numnick))))
-  {
-    /*
-     *  This link is trying feed me a server that I already have
-     *  access through another path
-     *
-     *  Do not allow Uworld to do this.
-     *  Do not allow servers that are juped.
-     *  Do not allow servers that have older link timestamps
-     *    then this try.
-     *  Do not allow servers that use the same numeric as an existing
-     *    server, but have a different name.
-     *
-     *  If my ircd.conf sucks, I can try to connect to myself:
-     */
-    if (acptr == &me)
-      return exit_client_msg(cptr, cptr, &me, "nick collision with me (%s), check server number in M:?", host);
-    /*
-     * Detect wrong numeric.
-     */
-    if (0 != ircd_strcmp(cli_name(acptr), host))
-    {
-      sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
-			    ":SERVER Numeric Collision: %s != %s",
-			    cli_name(acptr), host);
-      return exit_client_msg(cptr, cptr, &me,
-          "NUMERIC collision between %s and %s."
-          " Is your server numeric correct ?", host, cli_name(acptr));
-    }
-    /*
-     *  Kill our try, if we had one.
-     */
-    if (IsConnecting(acptr))
-    {
-      if (active_lh_line == ALLOWED && exit_client_msg(cptr, acptr, &me,
-          "Just connected via another link") == CPTR_KILLED)
-        return CPTR_KILLED;
-      /*
-       * We can have only ONE 'IsConnecting', 'IsHandshake' or
-       * 'IsServer', because new 'IsConnecting's are refused to
-       * the same server if we already had it.
-       */
-      break;
-    }
-    /*
-     * Avoid other nick collisions...
-     * This is a doubtful test though, what else would it be
-     * when it has a server.name ?
-     */
-    else if (!IsServer(acptr) && !IsHandshake(acptr))
-      return exit_client_msg(cptr, cptr, &me,
-                             "Nickname %s already exists!", host);
-    /*
-     * Our new server might be a juped server,
-     * or someone trying abuse a second Uworld:
-     */
-    else if (IsServer(acptr) && (0 == ircd_strncmp(cli_info(acptr), "JUPE", 4) ||
-        find_conf_byhost(cli_confs(cptr), cli_name(acptr), CONF_UWORLD)))
-    {
-      if (!IsServer(sptr))
-        return exit_client_msg(cptr, sptr, &me, "%s", cli_info(acptr));
-      sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
-			    ":Received :%s SERVER %s from %s !?!",
-                            NumServ(cptr), host, cli_name(cptr));
-      return exit_new_server(cptr, sptr, host, timestamp, "%s", cli_info(acptr));
-    }
-    /*
-     * Of course we find the handshake this link was before :)
-     */
-    else if (IsHandshake(acptr) && acptr == cptr)
-      break;
-    /*
-     * Here we have a server nick collision...
-     * We don't want to kill the link that was last /connected,
-     * but we neither want to kill a good (old) link.
-     * Therefor we kill the second youngest link.
-     */
-    if (1)
-    {
-      struct Client* c2ptr = 0;
-      struct Client* c3ptr = acptr;
-      struct Client* ac2ptr;
-      struct Client* ac3ptr;
-
-      /* Search youngest link: */
-      for (ac3ptr = acptr; ac3ptr != &me; ac3ptr = cli_serv(ac3ptr)->up)
-        if (cli_serv(ac3ptr)->timestamp > cli_serv(c3ptr)->timestamp)
-          c3ptr = ac3ptr;
-      if (IsServer(sptr))
-      {
-        for (ac3ptr = sptr; ac3ptr != &me; ac3ptr = cli_serv(ac3ptr)->up)
-          if (cli_serv(ac3ptr)->timestamp > cli_serv(c3ptr)->timestamp)
-            c3ptr = ac3ptr;
-      }
-      if (timestamp > cli_serv(c3ptr)->timestamp)
-      {
-        c3ptr = 0;
-        c2ptr = acptr;          /* Make sure they differ */
-      }
-      /* Search second youngest link: */
-      for (ac2ptr = acptr; ac2ptr != &me; ac2ptr = cli_serv(ac2ptr)->up)
-        if (ac2ptr != c3ptr &&
-            cli_serv(ac2ptr)->timestamp >
-            (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
-          c2ptr = ac2ptr;
-      if (IsServer(sptr))
-      {
-        for (ac2ptr = sptr; ac2ptr != &me; ac2ptr = cli_serv(ac2ptr)->up)
-          if (ac2ptr != c3ptr &&
-              cli_serv(ac2ptr)->timestamp >
-              (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
-            c2ptr = ac2ptr;
-      }
-      if (c3ptr && timestamp > (c2ptr ? cli_serv(c2ptr)->timestamp : timestamp))
-        c2ptr = 0;
-      /* If timestamps are equal, decide which link to break
-       *  by name.
-       */
-      if ((c2ptr ? cli_serv(c2ptr)->timestamp : timestamp) ==
-          (c3ptr ? cli_serv(c3ptr)->timestamp : timestamp))
-      {
-        const char *n2, *n2up, *n3, *n3up;
-        if (c2ptr)
-        {
-          n2 = cli_name(c2ptr);
-          n2up = MyConnect(c2ptr) ? cli_name(&me) : cli_name(cli_serv(c2ptr)->up);
-        }
-        else
-        {
-          n2 = host;
-          n2up = IsServer(sptr) ? cli_name(sptr) : cli_name(&me);
-        }
-        if (c3ptr)
-        {
-          n3 = cli_name(c3ptr);
-          n3up = MyConnect(c3ptr) ? cli_name(&me) : cli_name(cli_serv(c3ptr)->up);
-        }
-        else
-        {
-          n3 = host;
-          n3up = IsServer(sptr) ? cli_name(sptr) : cli_name(&me);
-        }
-        if (strcmp(n2, n2up) > 0)
-          n2 = n2up;
-        if (strcmp(n3, n3up) > 0)
-          n3 = n3up;
-        if (strcmp(n3, n2) > 0)
-        {
-          ac2ptr = c2ptr;
-          c2ptr = c3ptr;
-          c3ptr = ac2ptr;
-        }
-      }
-      /* Now squit the second youngest link: */
-      if (!c2ptr)
-        return exit_new_server(cptr, sptr, host, timestamp,
-                               "server %s already exists and is %ld seconds younger.",
-                               host, (long)cli_serv(acptr)->timestamp - (long)timestamp);
-      else if (cli_from(c2ptr) == cptr || IsServer(sptr))
-      {
-        struct Client *killedptrfrom = cli_from(c2ptr);
-        if (active_lh_line != ALLOWED)
-        {
-          /*
-           * If the L: or H: line also gets rid of this link,
-           * we sent just one squit.
-           */
-          if (LHcptr && a_kills_b_too(LHcptr, c2ptr))
-            break;
-          /*
-           * If breaking the loop here solves the L: or H:
-           * line problem, we don't squit that.
-           */
-          if (cli_from(c2ptr) == cptr || (LHcptr && a_kills_b_too(c2ptr, LHcptr)))
-            active_lh_line = ALLOWED;
-          else
-          {
-            /*
-             * If we still have a L: or H: line problem,
-             * we prefer to squit the new server, solving
-             * loop and L:/H: line problem with only one squit.
-             */
-            LHcptr = 0;
-            break;
-          }
-        }
-        /*
-         * If the new server was introduced by a server that caused a
-         * Ghost less then 20 seconds ago, this is probably also
-         * a Ghost... (20 seconds is more then enough because all
-         * SERVER messages are at the beginning of a net.burst). --Run
-         */
-        if (CurrentTime - cli_serv(cptr)->ghost < 20)
-        {
-          killedptrfrom = cli_from(acptr);
-          if (exit_client_msg(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
-            return CPTR_KILLED;
-        }
-        else if (exit_client_msg(cptr, c2ptr, &me,
-            "Loop <-- %s (new link is %ld seconds younger)", host,
-            (c3ptr ? (long)cli_serv(c3ptr)->timestamp : timestamp) -
-            (long)cli_serv(c2ptr)->timestamp) == CPTR_KILLED)
-          return CPTR_KILLED;
-        /*
-         * Did we kill the incoming server off already ?
-         */
-        if (killedptrfrom == cptr)
-          return 0;
-      }
-      else
-      {
-        if (active_lh_line != ALLOWED)
-        {
-          if (LHcptr && a_kills_b_too(LHcptr, acptr))
-            break;
-          if (cli_from(acptr) == cptr || (LHcptr && a_kills_b_too(acptr, LHcptr)))
-            active_lh_line = ALLOWED;
-          else
-          {
-            LHcptr = 0;
-            break;
-          }
-        }
-        /*
-         * We can't believe it is a lagged server message
-         * when it directly connects to us...
-         * kill the older link at the ghost, rather then
-         * at the second youngest link, assuming it isn't
-         * a REAL loop.
-         */
-        if (ghost)
-          *ghost = CurrentTime;            /* Mark that it caused a ghost */
-        if (exit_client_msg(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
-          return CPTR_KILLED;
-        break;
-      }
-    }
-  }
-
-  if (active_lh_line != ALLOWED)
+  
+  // check loops
+  res = check_loop(cptr, sptr, ghost, host, numnick, timestamp, hop, junction, looplink, &active_lh_line, &LHcptr);
+  if(res != 2)
+    return res;
+    if (active_lh_line != ALLOWED)
   {
     if (!LHcptr)
       LHcptr = sptr;
@@ -491,6 +515,8 @@ void set_server_flags(struct Client *cptr, const char *flags)
     while (*flags) switch (*flags++) {
     case 'h': SetHub(cptr); break;
     case 's': SetService(cptr); break;
+    case 'r':
+    case 'R': SetRouter(cptr); break;
     case '6': SetIPv6(cptr); break;
     }
 }
@@ -505,6 +531,7 @@ void set_server_flags(struct Client *cptr, const char *flags)
  * \li \a parv[5] is the protocol version (P10 or J10)
  * \li \a parv[6] is the numnick mask for the server
  * \li \a parv[7] is a string of flags like +hs to mark hubs and services
+ * \li \a parv[+1] [if flag +r] is the link cost to the server
  * \li \a parv[\a parc - 1] is the server description
  *
  * See @ref m_functions for discussion of the arguments.
@@ -515,16 +542,22 @@ void set_server_flags(struct Client *cptr, const char *flags)
  */
 int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
+  int              i;
+  struct Client*   acptr;
+  struct Client*   dcptr;
   char*            host;
   struct ConfItem* aconf;
   struct Jupe*     ajupe;
   int              hop;
   int              ret;
+  int              looplink;
   unsigned short   prot;
   time_t           start_timestamp;
   time_t           timestamp;
   time_t           recv_time;
   time_t           ghost;
+  unsigned int     linkcost;
+  unsigned int     announce_link;
 
   if (IsUserPort(cptr))
     return exit_client_msg(cptr, cptr, &me,
@@ -617,37 +650,99 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
   memset(cli_passwd(cptr), 0, sizeof(cli_passwd(cptr)));
 
-  ret = check_loop_and_lh(cptr, sptr, &ghost, host, (parc > 7 ? parv[6] : NULL), timestamp, hop, 1);
+  // check for +r/+R flag presence
+  ret = 0;
+  looplink = 0;
+  if (parc > 8 && *parv[7] == '+') {
+    for(i = 1; parv[7][i]; i++) {
+      if(parv[7][i] == 'R') {
+        ret = 1;
+        looplink = 1;
+        break;
+      }
+      else if(parv[7][i] == 'r') {
+        ret = 1;
+        break;
+      }
+    }
+  }
+
+  if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
+    /* received my own server announcement - we're about to close a loop
+     * first check if server is signaling routing support via +r flag
+     * then ensure the router flag is set in acptr as well otherwise at 
+     * least one server in the loop does not support routing!
+     */
+    if(ret && !IsRouter(acptr)) {
+      sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: routing loop over incompatible server.", cli_name(cptr));
+      return exit_client_msg(cptr, cptr, &me, "Routing loop over incompatible server");
+    }
+    else if(looplink && IsBurstOrBurstAck(acptr)) {
+      sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: couldn't create routing loop as server is not fully registered to the network, yet.", cli_name(cptr));
+      return exit_client_msg(cptr, cptr, &me, "cannot create routing loop - active burst");
+    }
+  }
+  else if(looplink) {
+    sendto_opmask_butone(0, SNO_OLDSNO, "Closed connection to %s: couldn't create routing loop as server is not known.", cli_name(cptr));
+    return exit_client_msg(cptr, cptr, &me, "cannot create routing loop - unknown server");
+  }
+
+  ret = check_loop_and_lh(cptr, sptr, &ghost, host, parv[6], timestamp, hop, 1, looplink);
   if (ret != 1)
     return ret;
+  
+  announce_link = 0;
+  if(IsServerPort(cptr))
+    announce_link |= 0x02;
+  
+  if(acptr) {
+    impersonate_client(cptr, acptr);
+  }
+  else {
+    acptr = cptr;
+    announce_link |= 0x01;
+    
+    make_server(cptr);
+    cli_serv(cptr)->timestamp = timestamp;
+    cli_serv(cptr)->prot = prot;
+    cli_serv(cptr)->ghost = ghost;
+    memset(cli_privs(cptr), 255, sizeof(struct Privs));
+    ClrPriv(cptr, PRIV_SET);
+    SetServerYXX(cptr, cptr, parv[6]);
 
-  make_server(cptr);
-  cli_serv(cptr)->timestamp = timestamp;
-  cli_serv(cptr)->prot = prot;
-  cli_serv(cptr)->ghost = ghost;
-  memset(cli_privs(cptr), 255, sizeof(struct Privs));
-  ClrPriv(cptr, PRIV_SET);
-  SetServerYXX(cptr, cptr, parv[6]);
-
+    if (parc > 8 && *parv[7] == '+')
+      set_server_flags(cptr, parv[7] + 1);
+  }
+  
   /* Attach any necessary UWorld config items. */
-  attach_confs_byhost(cptr, host, CONF_UWORLD);
-
-  if (*parv[7] == '+')
-    set_server_flags(cptr, parv[7] + 1);
-
+  attach_confs_byhost(acptr, host, CONF_UWORLD);
+  if(!(con_linkcost(cli_connect(acptr)) = aconf->linkcost))
+    con_linkcost(cli_connect(acptr)) = 10;
+  
   recv_time = TStime();
-  check_start_timestamp(cptr, timestamp, start_timestamp, recv_time);
-  ret = server_estab(cptr, aconf);
-
+  check_start_timestamp(acptr, timestamp, start_timestamp, recv_time);
+  
+  if (parc > 9)
+    linkcost = atoi(parv[8]);
+  else
+    linkcost = 0;
+  linkcost += con_linkcost(cli_connect(acptr));
+  if(!linkcost)
+    linkcost = 1;
+  
+  announce_server_link(acptr, acptr, acptr, &me, linkcost);
+  ret = server_estab(acptr, aconf, announce_link);
+  
   if (feature_bool(FEAT_RELIABLE_CLOCK) &&
-      labs(cli_serv(cptr)->timestamp - recv_time) > 30) {
+      labs(cli_serv(acptr)->timestamp - recv_time) > 30) {
     sendto_opmask_butone(0, SNO_OLDSNO, "Connected to a net with a "
 			 "timestamp-clock difference of %Td seconds! "
 			 "Used SETTIME to correct this.",
 			 timestamp - recv_time);
-    sendcmdto_prio_one(&me, CMD_SETTIME, cptr, "%Tu :%s", TStime(),
+    sendcmdto_prio_one(&me, CMD_SETTIME, acptr, "%Tu :%s", TStime(),
 		       cli_name(&me));
   }
+  flush_link_announcements();
 
   return ret;
 }
@@ -662,6 +757,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
  * \li \a parv[5] is the protocol version (P10 or J10)
  * \li \a parv[6] is the numnick mask for the server
  * \li \a parv[7] is a string of flags like +hs to mark hubs and services
+ * \li \a parv[+1] is a string of flags like +hs to mark hubs and services
  * \li \a parv[\a parc - 1] is the server description
  *
  * See @ref m_functions for discussion of the arguments.
@@ -681,6 +777,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   unsigned short   prot;
   time_t           start_timestamp;
   time_t           timestamp;
+  unsigned int     linkcost;
 
   if (parc < 8)
   {
@@ -718,22 +815,36 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return exit_client_msg(cptr, cptr, &me,
                            "No server info specified for %s", host);
 
-  ret = check_loop_and_lh(cptr, sptr, NULL, host, (parc > 7 ? parv[6] : NULL), timestamp, hop, parv[5][0] == 'J');
+  if (parc > 8)
+    linkcost = atoi(parv[8]);
+  else
+    linkcost = 0;
+  linkcost += con_linkcost(cli_connect(cptr));
+
+  if((acptr = FindNServer(parv[6])) && !ircd_strcmp(cli_name(acptr), host)) {
+    /* server is already known - use this message as link announcement */
+    announce_server_link(cptr, acptr, cptr, sptr, linkcost);
+    
+    /* we already know the server, so do not continue processing here */
+    return 0;
+  }
+
+  ret = check_loop_and_lh(cptr, sptr, NULL, host, parv[6], timestamp, hop, parv[5][0] == 'J', 0);
   if (ret != 1)
     return ret;
-
+  
   /*
    * Server is informing about a new server behind
    * this link. Create REMOTE server structure,
    * add it to list and propagate word to my other
    * server links...
    */
-
   acptr = make_client(cptr, STAT_SERVER);
   make_server(acptr);
   cli_serv(acptr)->prot = prot;
   cli_serv(acptr)->timestamp = timestamp;
   cli_hopcount(acptr) = hop;
+  cli_linkcost(acptr) = linkcost;
   ircd_strncpy(cli_name(acptr), host, HOSTLEN);
   ircd_strncpy(cli_info(acptr), parv[parc-1], REALLEN);
   cli_serv(acptr)->up = sptr;
@@ -741,18 +852,21 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /* Use cptr, because we do protocol 9 -> 10 translation
      for numeric nicks ! */
   SetServerYXX(cptr, acptr, parv[6]);
-
+  
   /* Attach any necessary UWorld config items. */
   attach_confs_byhost(cptr, host, CONF_UWORLD);
-
+  
   if (*parv[7] == '+')
     set_server_flags(acptr, parv[7] + 1);
-
+  
   Count_newremoteserver(UserStats);
   if (Protocol(acptr) < 10)
     SetFlag(acptr, FLAG_TS8);
   add_client_to_list(acptr);
   hAddClient(acptr);
+  
+  announce_server_link(cptr, acptr, cptr, sptr, linkcost);
+  
   if (*parv[5] == 'J')
   {
     SetBurst(acptr);
@@ -775,11 +889,11 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       continue;
     if (0 == match(cli_name(&me), cli_name(acptr)))
       continue;
-    sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s%s%s :%s",
+    sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s%s%s%s %u :%s",
                   cli_name(acptr), hop + 1, parv[4], parv[5],
                   NumServCap(acptr), IsHub(acptr) ? "h" : "",
                   IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
-                  cli_info(acptr));
+                  IsRouter(acptr) ? "r" : "", linkcost, cli_info(acptr));
   }
   return 0;
 }

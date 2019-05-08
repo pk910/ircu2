@@ -1,7 +1,6 @@
 /*
- * IRC - Internet Relay Chat, ircd/m_version.c
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Computing Center
+ * IRC - Internet Relay Chat, ircd/m_linkchange.c
+ * Copyright (C) 2010 Kevin L. Mitchell <klmitch@mit.edu>
  *
  * See file AUTHORS in IRC package for additional names of
  * the programmers.
@@ -82,42 +81,77 @@
 #include "config.h"
 
 #include "client.h"
-#include "hash.h"
 #include "ircd.h"
-#include "ircd_features.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
-#include "ircd_snprintf.h"
 #include "ircd_string.h"
-#include "match.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
-#include "s_debug.h"
-#include "s_user.h"
 #include "send.h"
-#include "supported.h"
-#include "version.h"
+#include "s_misc.h"
+#include "s_routing.h"
 
-/* #include <assert.h> -- Now using assert in ircd_log.h */
+#include <string.h>
 
 /*
- * m_version - generic message handler
+ * ms_linkchange - uplink change announcement
  *
- *   parv[0] = sender prefix
- *   parv[1] = servername
+ * parv[0] = sender prefix
+ * parv[1] = data
  */
-int m_version(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+int ms_linkchange(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
-  if (hunt_server_cmd(sptr, CMD_VERSION, cptr, feature_int(FEAT_HIS_REMOTE),
-                                                           ":%C", 1,
-                                                           parc, parv)
-                      == HUNTED_ISME)
-  {
-    send_reply(sptr, RPL_VERSION, version, cli_name(&me), debug_serveropts());
-    if (MyUser(sptr))
-      send_supported(sptr);
+  if(parc < 2)
+    return need_more_params(sptr, "LINKCHANGE");
+  
+  struct Client* acptr;
+  struct Client* parent;
+  int i;
+  unsigned int linkcost;
+  char *msgdata;
+  char *announce, tmpch;
+  
+  msgdata = parv[1];
+  
+  msgdata = strtok(msgdata, " ");
+  while (msgdata) {
+    announce = msgdata;
+    msgdata = strtok(NULL, " ");
+    if(strlen(announce) < 5)
+      continue;
+    
+    tmpch = announce[2];
+    announce[2] = '\0';
+    acptr = FindNServer(announce);
+    announce[2] = tmpch;
+    announce += 2;
+    if(!acptr)
+      continue;
+    if(acptr == &me)
+      continue;
+    
+    tmpch = announce[2];
+    announce[2] = '\0';
+    parent = FindNServer(announce);
+    announce[2] = tmpch;
+    announce += 2;
+    
+    if(parent == &me)
+      continue;
+    
+    if(*announce == '-')
+      denounce_server_route(cptr, acptr, cli_yxx(cptr), cli_yxx(parent), 1);
+    else if(*announce == '0')
+      denounce_server_route(cptr, acptr, cli_yxx(cptr), cli_yxx(parent), 0);
+    else {
+      linkcost = atoi(announce);
+      linkcost += cli_linkcost(cptr);
+      
+      announce_server_link(cptr, acptr, cptr, parent, linkcost);
+    }
   }
-
+  
+  flush_link_announcements();
   return 0;
 }

@@ -350,6 +350,8 @@ int completed_connection(struct Client* cptr)
     const char* msg = strerror(cli_error(cptr));
     if (!msg)
       msg = "Unknown error";
+    Debug((DEBUG_PROTO, "Outgoing connection failed [%s] %s (%s)", GetClientTypeChar(cptr), cli_name(cptr), msg));
+    
     sendto_opmask_butone(0, SNO_OLDSNO, "Connection failed to %s: %s",
                          cli_name(cptr), msg);
     return 0;
@@ -377,6 +379,7 @@ int completed_connection(struct Client* cptr)
   }
   assert(0 != cli_serv(cptr));
 
+  Debug((DEBUG_PROTO, "Completed outgoing connection: [%s] %s", GetClientTypeChar(cptr), cli_name(cptr)));
   cli_serv(cptr)->timestamp = newts;
   SetHandshake(cptr);
   /*
@@ -385,10 +388,10 @@ int completed_connection(struct Client* cptr)
   cli_lasttime(cptr) = CurrentTime;
   ClearPingSent(cptr);
 
-  sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
+  sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6%s 0 :%s",
                 cli_name(&me), cli_serv(&me)->timestamp, newts,
-		MAJOR_PROTOCOL, NumServCap(&me),
-		feature_bool(FEAT_HUB) ? "h" : "", cli_info(&me));
+		MAJOR_PROTOCOL, NumServCap(&me), feature_bool(FEAT_HUB) ? "h" : "", 
+    (acptr = FindServer(aconf->name)) ? "R" : "r", cli_info(&me));
 
   return (IsDead(cptr)) ? 0 : 1;
 }
@@ -434,6 +437,7 @@ void close_connection(struct Client *cptr)
   else
     ServerStats->is_ni++;
 
+  Debug((DEBUG_PROTO, "Closed connection [%s:%s] %s",  GetClientTypeChar(cptr), cptr->cli_yxx, cli_name(cptr)));
   if(cli_connect(cptr)->con_ssl) {
     ssl_free_connection(cli_connect(cptr)->con_ssl);
     cli_connect(cptr)->con_ssl = NULL;
@@ -581,6 +585,7 @@ void add_connection(struct Listener* listener, int fd) {
   cli_listener(new_client) = listener;
   ++listener->ref_count;
 
+  Debug((DEBUG_PROTO, "Accepted incoming connection [%s] %s", GetClientTypeChar(new_client), cli_sockhost(new_client)));
   Count_newunknown(UserStats);
   
   if(listener_ssl(listener)) {
@@ -766,7 +771,7 @@ int connect_server(struct ConfItem* aconf, struct Client* by)
          ircd_ntoa(&aconf->address.addr)));
 
   if ((cptr = FindClient(aconf->name))) {
-    if (IsServer(cptr) || IsMe(cptr)) {
+    if ((MyConnect(cptr) && IsServer(cptr)) || IsMe(cptr)) {
       sendto_opmask_butone(0, SNO_OLDSNO, "Server %s already present from %s", 
                            aconf->name, cli_name(cli_from(cptr)));
       if (by && IsUser(by) && !MyUser(by)) {
@@ -775,7 +780,7 @@ int connect_server(struct ConfItem* aconf, struct Client* by)
       }
       return 0;
     }
-    else if (IsHandshake(cptr) || IsConnecting(cptr)) {
+    else if (MyConnect(cptr) && (IsHandshake(cptr) || IsConnecting(cptr))) {
       if (by && IsUser(by)) {
         sendcmdto_one(&me, CMD_NOTICE, by, "%C :Connection to %s already in "
                       "progress", by, cli_name(cptr));
@@ -860,13 +865,9 @@ int connect_server(struct ConfItem* aconf, struct Client* by)
 
   LocalClientArray[cli_fd(cptr)] = cptr;
 
+  Debug((DEBUG_PROTO, "Stating outgoing connecting [%s] %s", GetClientTypeChar(cptr), cli_name(cptr)));
   Count_newunknown(UserStats);
-  /* Actually we lie, the connect hasn't succeeded yet, but we have a valid
-   * cptr, so we register it now.
-   * Maybe these two calls should be merged.
-   */
-  add_client_to_list(cptr);
-  hAddClient(cptr);
+  
 /*    nextping = CurrentTime; */
 
   struct SSLConnection *ssl = cli_connect(cptr)->con_ssl;
@@ -1007,6 +1008,21 @@ static void client_sock_callback(struct Event* ev)
     }
     else
       exit_client_msg(cptr, cptr, &me, fmt, msg);
+  }
+  else if(cptr && IsImpersonating(cptr)) {
+    /* client structure wants to be switched over to another one
+     * this is just to ensure the packet parser does not continue with 
+     * the old client cptr pointer in stack
+     */
+    ClrFlag(cptr, FLAG_IMPERSONATING);
+    
+    // flag for removal and assign dummy connection to protect the impersonated connection
+    SetFlag(cptr, FLAG_DEADSOCKET);
+    cli_connect(cptr) = make_connection();
+    cli_from(cptr) = cptr;
+    
+    // exit the old client with the dummy connection
+    exit_client(cptr, cptr, &me, "impersonated");
   }
 }
 

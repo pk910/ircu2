@@ -50,6 +50,7 @@
 #include "s_bsd.h"
 #include "s_conf.h"
 #include "s_debug.h"
+#include "s_routing.h"
 #include "s_stats.h"
 #include "s_user.h"
 #include "send.h"
@@ -616,6 +617,15 @@ int exit_client(struct Client *cptr,
   
   char comment1[HOSTLEN + HOSTLEN + 2];
   assert(killer);
+  if (MyConnect(victim) && IsServer(victim) && (!IsServer(killer) || IsMe(killer))) {
+    remove_uplink_routes(victim);
+    if(!MyConnect(victim)) {
+      // server is still liked via another uplink
+      flush_link_announcements();
+      return (cptr == victim) ? CPTR_KILLED : 0;
+    }
+  }
+  
   if (MyConnect(victim))
   {
     SetFlag(victim, FLAG_CLOSING);
@@ -653,17 +663,12 @@ int exit_client(struct Client *cptr,
     if (victim != cli_from(killer)  /* The source knows already */
         && IsClient(victim))    /* Not a Ping struct or Log file */
     {
-      if (IsServer(victim) || IsHandshake(victim))
-        sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
-      else if (!IsConnecting(victim)) {
+      if (!IsConnecting(victim)) {
         if (!IsDead(victim)) {
           if (IsServer(victim))
-            sendcmdto_one(killer, CMD_ERROR, victim,
-              ":Closing Link: %s by %s (%s)", cli_name(victim),
-              cli_name(killer), comment);
+            sendcmdto_one(killer, CMD_ERROR, victim, ":Closing Link: %s by %s (%s)", cli_name(victim), cli_name(killer), comment);
           else
-            sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)",
-              cli_name(victim), cli_name(IsServer(killer) ? &his : killer), comment);
+            sendrawto_one(victim, MSG_ERROR " :Closing Link: %s by %s (%s)", cli_name(victim), cli_name(IsServer(killer) ? &his : killer), comment);
         }
       }
       if ((IsServer(victim) || IsHandshake(victim) || IsConnecting(victim)) &&
@@ -752,6 +757,9 @@ int exit_client(struct Client *cptr,
   if (IsServer(victim))
     exit_downlinks(victim, killer, comment1);
   exit_one_client(victim, comment);
+
+  /* Propagate link announcements after SQUIT was sent */
+  flush_link_announcements();
 
   /*
    *  cptr can only have been killed if it was cptr itself that got killed here,

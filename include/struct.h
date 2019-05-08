@@ -37,12 +37,17 @@ struct Client;
 struct User;
 struct Membership;
 struct SLink;
+struct RouteList;
+struct RouteInfo;
 
 /** Describes a server on the network. */
 struct Server {
   struct Client*  up;           /**< Server one closer to me */
   struct DLink*   down;         /**< List with downlink servers */
   struct DLink*   updown;       /**< own Dlink in up->serv->down struct */
+  struct RouteList* routes; /**< List with all links to this server (sorted by link cost) */
+  struct RouteInfo* fwd_route;  /**< Broadcast forward route from this server */
+  struct RouteInfo* own_route;  /**< Broadcast send route to this server */
   struct Client** client_list;  /**< List with client pointers on this server */
   struct User*    user;         /**< who activated this connection */
   time_t          timestamp;    /**< Remotely determined connect try time */

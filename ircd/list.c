@@ -40,6 +40,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_user.h"
 #include "send.h"
 #include "struct.h"
@@ -181,6 +182,22 @@ static void dealloc_connection(struct Connection* con)
   con_magic(con) = 0;
 }
 
+struct Connection* make_connection(void) {
+  struct Connection *con = alloc_connection();
+
+  assert(0 != con);
+  assert(!con_magic(con));
+
+  con_magic(con) = CONNECTION_MAGIC;
+  con_fd(con) = -1; /* initialize struct Connection */
+  con_freeflag(con) = 0;
+  con_nextnick(con) = CurrentTime - NICK_DELAY;
+  con_nexttarget(con) = CurrentTime - (TARGET_DELAY * (STARTTARGETS - 1));
+  con_handler(con) = UNREGISTERED_HANDLER;
+
+  return con;
+}
+
 /** Allocate a new client and initialize it.
  * If \a from == NULL, initialize the fields for a local client,
  * including allocating a Connection for him; otherwise initialize the
@@ -203,17 +220,7 @@ struct Client* make_client(struct Client *from, int status)
   assert(0 == from || 0 != cli_connect(from));
 
   if (!from) { /* local client, allocate a struct Connection */
-    struct Connection *con = alloc_connection();
-
-    assert(0 != con);
-    assert(!con_magic(con));
-
-    con_magic(con) = CONNECTION_MAGIC;
-    con_fd(con) = -1; /* initialize struct Connection */
-    con_freeflag(con) = 0;
-    con_nextnick(con) = CurrentTime - NICK_DELAY;
-    con_nexttarget(con) = CurrentTime - (TARGET_DELAY * (STARTTARGETS - 1));
-    con_handler(con) = UNREGISTERED_HANDLER;
+    struct Connection *con = make_connection();
     con_client(con) = cptr;
 
     cli_connect(cptr) = con; /* set the connection and other fields */
@@ -366,6 +373,7 @@ void remove_client_from_list(struct Client *cptr)
     }
     if (cli_serv(cptr)->client_list)
       MyFree(cli_serv(cptr)->client_list);
+    free_server_routes(cptr);
     MyFree(cli_serv(cptr)->last_error_msg);
     MyFree(cli_serv(cptr));
     --servs.inuse;

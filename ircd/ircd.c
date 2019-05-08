@@ -53,6 +53,7 @@
 #include "s_conf.h"
 #include "s_debug.h"
 #include "s_misc.h"
+#include "s_routing.h"
 #include "s_stats.h"
 #include "send.h"
 #include "sys.h"
@@ -108,8 +109,7 @@ time_t         TSoffset          = 0;   /**< Offset of timestamps to system cloc
 time_t         CurrentTime;             /**< Updated every time we leave select() */
 
 char          *configfile        = CPATH; /**< Server configuration file */
-int            debuglevel        = -1;    /**< Server debug level  */
-char          *debugmode         = "";    /**< Server debug level */
+unsigned int  debuglevel         = 0;    /**< Server debug level  */
 static char   *dpath             = DPATH; /**< Working directory for daemon */
 static char   *dbg_client;                /**< Client specifier for chkconf */
 
@@ -255,6 +255,7 @@ static void try_connections(struct Event* ev) {
   struct Jupe*      ajupe;
   int               hold;
   int               done;
+  struct Client*    acptr;
 
   assert(ET_EXPIRE == ev_type(ev));
   assert(0 != ev_timer(ev));
@@ -287,7 +288,7 @@ static void try_connections(struct Event* ev) {
      */
     if (hold || done
         || (ConfLinks(aconf) > ConfMaxLinks(aconf))
-        || FindServer(aconf->name)
+        || ((acptr = FindServer(aconf->name)) && (IsConnecting(acptr) || MyConnect(acptr)))
         || conf_eval_crule(aconf->name, CRULE_MASK))
       continue;
 
@@ -540,10 +541,7 @@ static void parse_command_line(int argc, char** argv) {
       break;
 
     case 'x':
-      debuglevel = atoi(optarg);
-      if (debuglevel < 0)
-	debuglevel = 0;
-      debugmode = optarg;
+      debuglevel = strtoul(optarg,  0, 0);
       thisServer.bootopt |= BOOT_DEBUG;
 #ifndef DEBUGMODE
       printf("WARNING: DEBUGMODE disabled; -x has no effect.\n");
@@ -551,9 +549,10 @@ static void parse_command_line(int argc, char** argv) {
       break;
 
     default:
-      printf("Usage: ircd [-f config] [-h servername] [-x loglevel] [-ntv] [-k [-c clispec]]\n"
+      printf("Usage: ircd [-f config] [-d workdir] [-h servername] [-x loglevel] [-ntv] [-k [-c clispec]]\n"
              "\n -f config\t specify explicit configuration file"
-             "\n -x loglevel\t set debug logging verbosity"
+             "\n -d workdir\t specify explicit working directory"
+             "\n -x loglevel\t set debug logging verbosity (decimal [1 - 2047] or hexadecimal [0x0 - 0x7ff])"
              "\n -n or -t\t don't detach"
              "\n -v\t\t display version"
              "\n -k\t\t exit after checking config"
