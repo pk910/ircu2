@@ -58,6 +58,8 @@ enum ListenerFlag {
   LISTEN_WEBIRC,
   /** Port listens for SSL connections. */
   LISTEN_SSL,
+  /** Port allows STARTSSL to establish ssl session. */
+  LISTEN_STARTTLS,
   /** Sentinel for counting listener flags. */
   LISTEN_LAST_FLAG
 };

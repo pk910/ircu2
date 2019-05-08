@@ -35,9 +35,10 @@ struct Message;
 #define CONF_AUTOCONNECT        0x0001     /**< Autoconnect to a server */
 
 #define CONF_USESSL             0x0008     /**< Use SSL for Port or Connect block */
-#define CONF_VERIFYCA           0x0010     /**< Verify certificate is signed by CACERT */
-#define CONF_VERIFYPEER         0x0020     /**< Verify client certificate (for listeners) */
-#define CONF_VERIFYCERT         0x0040     /**< Verify certificate fingerprint */
+#define CONF_STARTTLS           0x0010     /**< Allow STARTTLS from clients for Port block */
+#define CONF_VERIFYCA           0x0020     /**< Verify certificate is signed by CACERT */
+#define CONF_VERIFYPEER         0x0040     /**< Verify client certificate (for listeners) */
+#define CONF_VERIFYCERT         0x0080     /**< Verify certificate fingerprint */
 
 #define CONF_UWORLD_OPER        0x0001     /**< UWorld server can remotely oper users */
 

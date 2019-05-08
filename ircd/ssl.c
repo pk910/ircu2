@@ -33,6 +33,7 @@
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "list.h"
+#include "listener.h"
 #include "msgq.h"
 #include "numeric.h"
 #include "s_auth.h"
@@ -46,7 +47,7 @@
 #include <string.h>
 
 #ifndef IOV_MAX
-#define IOV_MAX 16  /**< minimum required length of an iovec array */
+#define IOV_MAX 1024  /**< minimum required length of an iovec array */
 #endif
 
 #if defined(HAVE_OPENSSL_SSL_H)
@@ -101,7 +102,7 @@ void ssl_free_connection(struct SSLConnection *connection) {
   
   if(context)
     SSL_CTX_free(context);
-  free(connection);
+  MyFree(connection);
 }
 
 void ssl_free_listener(struct SSLListener *listener) {
@@ -109,7 +110,7 @@ void ssl_free_listener(struct SSLListener *listener) {
   if(listener->cacert)
     X509_free(listener->cacert);
   SSL_CTX_free(listener->context);
-  free(listener);
+  MyFree(listener);
 }
 
 static void ssl_merge_config(struct SSLConf *target, const struct SSLConf *source) {
@@ -188,6 +189,33 @@ static X509 *ssl_load_certificate(char *filename) {
   return cert;
 }
 
+static void binary_to_hex(unsigned char *bin, char *hex, int length) {
+  static const char trans[] = "0123456789ABCDEF";
+  int i;
+
+  for(i = 0; i < length; i++) {
+    hex[i  << 1]      = trans[bin[i] >> 4];
+    hex[(i << 1) + 1] = trans[bin[i] & 0xf];
+  }
+
+  hex[i << 1] = '\0';
+}
+
+static const char *ssl_cert_fingerprint(X509* cert) {
+  unsigned int n = 0;
+  unsigned char md[EVP_MAX_MD_SIZE];
+  const EVP_MD *digest = EVP_sha256();
+  static char hex[BUFSIZE + 1];
+
+  if (!cert)
+    return NULL;
+  if (!X509_digest(cert, digest, md, &n))
+    return NULL;
+  
+  binary_to_hex(md, hex, n);
+  return hex;
+}
+
 static int ssl_verify_cert_is_signed(X509 *cert, X509 *cacert, const char **errmsg) {
   int res;
   X509_STORE *store;
@@ -231,6 +259,18 @@ static int ssl_verify_peer_certificate(struct SSLListener *listener, X509 *peer_
     if(!ssl_verify_cert_is_signed(peer_cert, listener->cacert, errmsg))
       valid = 0;
   }
+  if(valid && (listener->conf.flags & CONF_VERIFYCERT)) {
+    if(!listener->conf.certfp || !*listener->conf.certfp) {
+      if(errmsg)
+        *errmsg = "CertFP verification failed: fingerprint not set.";
+      valid = 0;
+    }
+    else if(strcmp(listener->conf.certfp, ssl_cert_fingerprint(peer_cert))) {
+      if(errmsg)
+        *errmsg = "CertFP verification failed: fingerprint does not match.";
+      valid = 0;
+    }
+  }
   
   return valid;
 }
@@ -253,6 +293,18 @@ static int ssl_verify_server_certificate(struct SSLOutConnection *connection, X5
     if(!ssl_verify_cert_is_signed(server_cert, connection->cacert, errmsg))
       valid = 0;
   }
+  if(valid && (connection->conf.flags & CONF_VERIFYCERT)) {
+    if(!connection->conf.certfp || !*connection->conf.certfp) {
+      if(errmsg)
+        *errmsg = "CertFP verification failed: fingerprint not set.";
+      valid = 0;
+    }
+    else if(strcmp(connection->conf.certfp, ssl_cert_fingerprint(server_cert))) {
+      if(errmsg)
+        *errmsg = "CertFP verification failed: fingerprint does not match.";
+      valid = 0;
+    }
+  }
   
   return valid;
 }
@@ -274,7 +326,8 @@ static int ssl_complete_client_incoming(struct SSLConnection *connection, struct
     
     return -1;
   }
-  start_auth(cptr);
+  if(!FlagHas(&connection->flags, SSLFLAG_STARTTLS))
+    start_auth(cptr);
   return 0;
 }
 
@@ -297,7 +350,7 @@ static int ssl_handshake_completed(struct SSLConnection *connection, int success
           ret = ssl_complete_client_outgoing((struct SSLOutConnection *)connection, cptr);
         }
       }
-      free(pending);
+      MyFree(pending);
       break;
     }
     lastPending = pending;
@@ -328,7 +381,7 @@ static int ssl_handshake_outgoing(struct SSLConnection *connection) {
 }
 
 struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *localcfg) {
-  struct SSLOutConnection *connection = calloc(1, sizeof(*connection));
+  struct SSLOutConnection *connection = MyCalloc(1, sizeof(*connection));
   struct SSLConnection *sslconn = (struct SSLConnection *)connection;
   struct SSLPendingConections *pending = NULL;
   
@@ -373,7 +426,7 @@ struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *loc
   FlagSet(&connection->flags, SSLFLAG_OUTGOING);
   FlagSet(&connection->flags, SSLFLAG_HANDSHAKE);
   
-  pending = malloc(sizeof(*pending));
+  pending = MyMalloc(sizeof(*pending));
   if(!pending) {
     goto ssl_create_connect_failed;
   }
@@ -385,7 +438,7 @@ struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *loc
   
   return sslconn;
 ssl_create_connect_failed:
-  free(connection);
+  MyFree(connection);
   return NULL;
 }
 
@@ -397,7 +450,7 @@ struct SSLListener *ssl_create_listener(struct SSLConf *localcfg) {
   if(!ssl_is_initialized)
     ssl_init();
   
-  struct SSLListener *listener = calloc(1, sizeof(*listener));
+  struct SSLListener *listener = MyCalloc(1, sizeof(*listener));
   listener->context = SSL_CTX_new(SSLv23_server_method());
   if(!listener->context) {
     goto ssl_create_listener_failed;
@@ -441,7 +494,7 @@ struct SSLListener *ssl_create_listener(struct SSLConf *localcfg) {
   FlagSet(&listener->flags, SSLFLAG_READY);
   return listener;
 ssl_create_listener_failed:
-  free(listener);
+  MyFree(listener);
   return NULL;
 }
 
@@ -473,7 +526,7 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   if(!listener)
     return NULL;
   struct SSLPendingConections *pending = NULL;
-  struct SSLConnection *connection = calloc(1, sizeof(*connection));
+  struct SSLConnection *connection = MyCalloc(1, sizeof(*connection));
   connection->session = SSL_new(listener->context);
   if(!connection->session) {
     goto ssl_start_handshake_listener_failed;
@@ -485,7 +538,7 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   FlagSet(&connection->flags, SSLFLAG_HANDSHAKE);
   FlagSet(&connection->flags, SSLFLAG_HANDSHAKE_R);
   
-  pending = malloc(sizeof(*pending));
+  pending = MyMalloc(sizeof(*pending));
   if(!pending) {
     goto ssl_start_handshake_listener_failed;
   }
@@ -499,8 +552,61 @@ struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener,
   ssl_handshake_incoming(connection);
   return connection;
 ssl_start_handshake_listener_failed:
-  free(connection);
+  MyFree(connection);
   return NULL;
+}
+
+int ssl_client_starttls(struct Client *client) {
+  if(!cli_local(client))
+    return 0;
+  
+  struct Connection *connect;
+  struct Listener *listener;
+  struct SSLPendingConections *pending = NULL;
+  if(!(connect = cli_connect(client)) || con_ssl(connect))
+    return 0;
+  if(!(listener = con_listener(connect)))
+    return 0;
+  
+  if(!FlagHas(&listener->flags, LISTEN_STARTTLS) || !listener->ssl_listener) {
+    send_reply(client, ERR_STARTTLS, "STARTTLS not supported or disabled");
+    return 0;
+  }
+  
+  struct SSLConnection *connection = MyCalloc(1, sizeof(*connection));
+  connection->session = SSL_new(listener->ssl_listener->context);
+  if(!connection->session) {
+    goto ssl_client_starttls_failed;
+  }
+  if(!SSL_set_fd(connection->session, cli_fd(client))) {
+    goto ssl_client_starttls_failed;
+  }
+  FlagSet(&connection->flags, SSLFLAG_INCOMING);
+  FlagSet(&connection->flags, SSLFLAG_STARTTLS);
+  FlagSet(&connection->flags, SSLFLAG_HANDSHAKE);
+  FlagSet(&connection->flags, SSLFLAG_HANDSHAKE_R);
+  
+  DBufClear(&(cli_recvQ(client)));
+
+	send_reply(client, RPL_STARTTLS);
+  send_queued(client);
+  
+  pending = MyMalloc(sizeof(*pending));
+  if(!pending) {
+    goto ssl_client_starttls_failed;
+  }
+  pending->listener = listener->ssl_listener;
+  pending->connection = connection;
+  pending->next = firstPendingConection;
+  firstPendingConection = pending;
+  
+  pending->data = client;
+  
+  ssl_handshake_incoming(connection);
+  return 1;
+ssl_client_starttls_failed:
+  MyFree(connection);
+  return 0;
 }
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len) {
@@ -630,6 +736,10 @@ const char *ssl_get_current_cipher(struct SSLConnection *connection) {
   return SSL_get_cipher_name(connection->session);
 }
 
+const char *ssl_get_fingerprint(struct SSLConnection *connection) { 
+  return NULL; 
+}
+
 #else
 // fallback dummy implementation
 
@@ -641,6 +751,10 @@ struct SSLConnection *ssl_create_connect(int fd, void *data) { return NULL; };
 
 struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data) { return NULL; };
 int ssl_start_handshake_connect(struct SSLConnection *connection) { return -1; };
+int ssl_client_starttls(struct Client *client) {
+  send_reply(client, ERR_STARTTLS, "STARTTLS not supported");
+  return 0;
+}
 
 IOResult ssl_recv_decrypt(struct SSLConnection *connection, char *buf, unsigned int buflen, unsigned int *len) { return IO_FAILURE; };
 IOResult ssl_send_encrypt(struct SSLConnection *connection, struct MsgQ* buf, unsigned int *count_in, unsigned int *count_out) { return IO_FAILURE; };
@@ -648,5 +762,6 @@ IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, const char *bu
 int ssl_connection_flush(struct SSLConnection *connection) { return 0; };
 
 const char *ssl_get_current_cipher(struct SSLConnection *connection) { return NULL; };
+const char *ssl_get_fingerprint(struct SSLConnection *connection) { return NULL; };
 #endif
 

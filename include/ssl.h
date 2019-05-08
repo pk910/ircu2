@@ -10,6 +10,7 @@
 enum SSLFlag {
   SSLFLAG_INCOMING,
   SSLFLAG_OUTGOING,
+  SSLFLAG_STARTTLS,
   SSLFLAG_READY,
   SSLFLAG_HANDSHAKE,
   SSLFLAG_HANDSHAKE_R,
@@ -79,6 +80,7 @@ extern void ssl_free_listener(struct SSLListener *listener);
 
 extern struct SSLListener *ssl_create_listener(struct SSLConf *config);
 extern struct SSLConnection *ssl_create_connect(int fd, void *data, struct SSLConf *config);
+extern int ssl_client_starttls(struct Client *client);
 
 extern struct SSLConnection *ssl_start_handshake_listener(struct SSLListener *listener, int fd, void *data);
 extern int ssl_start_handshake_connect(struct SSLConnection *connection);
@@ -89,5 +91,6 @@ IOResult ssl_send_encrypt_plain(struct SSLConnection *connection, const char *bu
 extern int ssl_connection_flush(struct SSLConnection *connection);
 
 extern const char *ssl_get_current_cipher(struct SSLConnection *connection);
+extern const char *ssl_get_fingerprint(struct SSLConnection *connection);
 
 #endif /* INCLUDED_parse_h */

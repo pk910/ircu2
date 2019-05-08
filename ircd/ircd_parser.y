@@ -179,6 +179,7 @@ static void free_slist(struct SLink **link) {
 %token DNS
 %token WEBIRC
 %token SSL
+%token STARTTLS
 %token SSL_CERTFILE
 %token SSL_KEYFILE
 %token SSL_CAFILE
@@ -896,7 +897,7 @@ portblock: PORT {
 };
 portitems: portitem portitems | portitem;
 portitem: portnumber | portvhost | portvhostnumber | portmask | portserver | portwebirc | 
-          portssl | porthidden | portsslcertfile | portsslkeyfile | portsslcafile |
+          portssl | portstarttls | porthidden | portsslcertfile | portsslkeyfile | portsslcafile |
           portsslciphers | portssloptions | portsslprotocol | portsslminprotocol |
           portsslmaxprotocol | portsslcurves | portsslverifypeer | portsslverifyca;
 portnumber: PORT '=' address_family NUMBER ';'
@@ -957,6 +958,14 @@ portssl: SSL '=' YES ';'
 } | SSL '=' NO ';'
 {
   FlagClr(&listen_flags, LISTEN_SSL);
+};
+
+portstarttls: STARTTLS '=' YES ';'
+{
+  FlagSet(&listen_flags, LISTEN_STARTTLS);
+} | SSL '=' NO ';'
+{
+  FlagClr(&listen_flags, LISTEN_STARTTLS);
 };
 
 porthidden: HIDDEN '=' YES ';'

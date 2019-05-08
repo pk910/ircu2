@@ -323,9 +323,9 @@ void add_listener(int port, const char* vhost_ip, const char* mask,
   }
   memcpy(&listener->flags, flags, sizeof(listener->flags));
   
-  if(FlagHas(&listener->flags, LISTEN_SSL) && !listener->ssl_listener) {
+  if((FlagHas(&listener->flags, LISTEN_SSL) || FlagHas(&listener->flags, LISTEN_STARTTLS)) && !listener->ssl_listener) {
     listener->ssl_listener = ssl_create_listener(sslcfg);
-  } else if(!FlagHas(&listener->flags, LISTEN_SSL) && listener->ssl_listener) {
+  } else if(!(FlagHas(&listener->flags, LISTEN_SSL) || FlagHas(&listener->flags, LISTEN_STARTTLS)) && listener->ssl_listener) {
     ssl_free_listener(listener->ssl_listener);
     listener->ssl_listener = NULL;
   }
