@@ -130,6 +130,7 @@ IRCD_SRC = \
 	m_die.c \
 	m_endburst.c \
 	m_error.c \
+	m_fingerprint.c \
 	m_get.c \
 	m_gline.c \
 	m_help.c \
@@ -170,6 +171,7 @@ IRCD_SRC = \
 	m_settime.c \
 	m_silence.c \
 	m_squit.c \
+	m_starttls.c \
 	m_stats.c \
 	m_time.c \
 	m_topic.c \

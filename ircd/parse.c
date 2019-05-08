@@ -652,6 +652,20 @@ struct Message msgtab[] = {
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_xreply, m_ignore, m_ignore }
   },
+  {
+    MSG_FINGERPRINT,
+    TOK_FINGERPRINT,
+    0, MAXPARA,         0, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_unregistered, m_fingerprint, m_ignore, m_fingerprint, m_ignore }
+  },
+  {
+    MSG_STARTTLS,
+    TOK_STARTTLS,
+    0, MAXPARA,         0, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_starttls, m_registered, m_ignore, m_registered, m_ignore }
+  },
 #if WE_HAVE_A_REAL_CAPABILITY_NOW
   {
     MSG_CAP,
