@@ -1022,7 +1022,7 @@ static void client_sock_callback(struct Event* ev)
     cli_from(cptr) = cptr;
     
     // exit the old client with the dummy connection
-    exit_client(cptr, cptr, &me, "impersonated");
+    exit_client_msg(cptr, cptr, &me, "impersonated");
   }
 }
 

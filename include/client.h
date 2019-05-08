@@ -722,6 +722,8 @@ struct Client {
 #define ClearNotConn(x)         ClrFlag(x, FLAG_NOTCONN)
 /** Return non-zero if the client has set mode +Z (Zombie) */
 #define ClearZombieUser(x)      ClrFlag(x, FLAG_ZOMBIE)
+/** Clear routing enabled flag */
+#define ClearRoutingEnabled(x)  ClrFlag(x, FLAG_ROUTING_ENABLED)
 /** Clear the client's pending PING flag. */
 #define ClearPingSent(x)        ClrFlag(x, FLAG_PINGSENT)
 /** Clear the client's HUB flag. */

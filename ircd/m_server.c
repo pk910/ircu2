@@ -152,7 +152,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
    */
   if (IsConnecting(acptr) && MyConnect(cptr))
   {
-    if (*active_lh_line == ALLOWED && exit_client(cptr, acptr, &me,
+    if (*active_lh_line == ALLOWED && exit_client_msg(cptr, acptr, &me,
         "Just connected via another link") == CPTR_KILLED)
       return CPTR_KILLED;
     
@@ -175,7 +175,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
       find_conf_byhost(cli_confs(cptr), cli_name(acptr), CONF_UWORLD)))
   {
     if (!IsServer(sptr))
-      return exit_client(cptr, sptr, &me, cli_info(acptr));
+      return exit_client_msg(cptr, sptr, &me, cli_info(acptr));
     sendcmdto_serv_butone(&me, CMD_WALLOPS, cptr,
         ":Received :%s SERVER %s from %s !?!",
                           NumServ(cptr), host, cli_name(cptr));
@@ -328,7 +328,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
       if (CurrentTime - cli_serv(cptr)->ghost < 20)
       {
         killedptrfrom = cli_from(acptr);
-        if (exit_client(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
+        if (exit_client_msg(cptr, acptr, &me, "Ghost loop") == CPTR_KILLED)
           return CPTR_KILLED;
       }
       else if (exit_client_msg(cptr, c2ptr, &me,
@@ -365,7 +365,7 @@ static int check_loop(struct Client* cptr, struct Client *sptr, time_t *ghost, c
        */
       if (ghost)
         *ghost = CurrentTime;            /* Mark that it caused a ghost */
-      if (exit_client(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
+      if (exit_client_msg(cptr, acptr, &me, "Ghost") == CPTR_KILLED)
         return CPTR_KILLED;
     }
   }
